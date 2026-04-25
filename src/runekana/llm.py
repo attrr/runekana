@@ -11,10 +11,8 @@ import logging
 import random
 import time
 import re
-import os
 import concurrent.futures
 from typing import Optional
-from dataclasses import dataclass
 
 from pydantic import BaseModel
 from openai import OpenAI as OpenAIClient
@@ -68,6 +66,9 @@ class LLM(ABC):
             2. 対象単語の活用形や送り仮名を「絶対に」勝手に変更・補完しないでください。（例：「学ん」という単語に対し「まなった」や「学んだ」と補完して答えるのは禁止です。必ず元の形のまま「まなん」と答えてください）
             3. 原文の平仮名部分と、読みの平仮名部分は完全に一致している必要があります。
             4. 小説のルビであるため、一般的に広く使われる慣用読みや訓読（例：「半年前」を「はんとしまえ」と読むなど）を、不必要に硬い音読（「はんとしぜん」など）に過剰修正しないでください。元の読みが日本語の口語として自然に通用するものであれば、そのまま正しいと判定してください。
+
+            以下のJSON形式で回答してください:
+            {"hints": [{"word": "対象語", "proposed": "提示読み", "is_correct": true/false, "correction": "修正読みまたはnull"}]}
 
             検証対象:
         """
@@ -169,6 +170,7 @@ class LLM(ABC):
 
         # predict
         response = self.predict_with_retry(prompt)
+        log.debug("Raw response:\n%s", response[:500] if response else "(empty)")
         return self.serialize_predict(response)
 
 
@@ -186,6 +188,7 @@ class Vertex(LLM):
 
     def predict(self, prompt: str) -> str:
         """Execute prediction using Vertex AI."""
+        log.debug("Prompt:\n%s", prompt)
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=prompt,
@@ -232,22 +235,29 @@ class OpenAI(LLM):
         self, api_key: str, base_url: str | None = None, model_name: str = "gpt-4o-mini"
     ) -> None:
         super().__init__(model_name=model_name)
-        self.client = OpenAIClient(api_key=api_key, base_url=base_url)
+        self.client = OpenAIClient(
+            api_key=api_key, base_url=base_url, max_retries=0, timeout=120.0
+        )
 
     def predict(self, prompt: str) -> str:
         """Execute prediction using OpenAI-compatible API."""
+        log.debug("Calling completions.create (model: %s)...", self.model_name)
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             temperature=0.0,
         )
+        log.debug("API returned successfully.")
 
         # Update token usage
         if hasattr(response, "usage") and response.usage:
             self.increase_counter(
                 response.usage.prompt_tokens, response.usage.completion_tokens
             )
+
+        if not response.choices:
+            raise RuntimeError(f"Empty choices from {self.model_name}: {response}")
 
         return response.choices[0].message.content or ""
 
@@ -269,11 +279,10 @@ def verify_candidates(
     grouped_candidates: dict[tuple, list],
     local_dict: dict[str, str],
     dict_path: str,
-    provider: str,
-    model: str,
+    llm: LLM,
     save_fn=None,
-    gcp_project: Optional[str] = None,
-    gcp_location: Optional[str] = None,
+    concurrency: int = 5,
+    batch_size: int = 100,
 ) -> int:
     """
     Verify reading candidates via LLM in parallel batches.
@@ -283,25 +292,9 @@ def verify_candidates(
     log.info(
         "Sending %d unique words to %s (%s)...",
         len(grouped_candidates),
-        provider.upper(),
-        model,
+        llm.provider,
+        llm.model_name,
     )
-
-    if provider == "gemini":
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if api_key:
-            llm: LLM = Gemini(api_key=api_key, model_name=model)
-        else:
-            if not gcp_project:
-                log.error(
-                    "GCP_PROJECT env var required when using gemini provider without GEMINI_API_KEY"
-                )
-                return 0
-            llm = Vertex(
-                project=gcp_project, location=gcp_location or "global", model_name=model
-            )
-    else:
-        llm = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""), model_name=model)
 
     candidates_objs = []
     cand_to_key = {}
@@ -316,14 +309,13 @@ def verify_candidates(
         candidates_objs.append(cand)
         cand_to_key[id(cand)] = k
 
-    batch_size = 100
     corrections = 0
     batches = [
         candidates_objs[i : i + batch_size]
         for i in range(0, len(candidates_objs), batch_size)
     ]
 
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=concurrency)
     future_to_batch = {executor.submit(llm.infer, batch): batch for batch in batches}
 
     try:

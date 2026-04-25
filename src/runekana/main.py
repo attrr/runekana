@@ -10,8 +10,10 @@ and optionally verifies difficult readings via Gemini or OpenAI.
 import argparse
 import logging
 import os
+import sys
 
 from runekana.epub import process_epub
+from runekana.llm import Gemini, Vertex, OpenAI, LLM
 from runekana.tokenizer import build_skip_set, load_local_dict, save_local_dict
 
 logging.basicConfig(
@@ -19,6 +21,30 @@ logging.basicConfig(
     format="%(levelname)s: %(message)s",
 )
 log = logging.getLogger(__name__)
+
+
+def _build_llm(args) -> LLM:
+    """Construct the appropriate LLM client from CLI arguments and env vars."""
+    if args.provider == "gemini":
+        api_key = os.environ.get("GEMINI_API_KEY")
+        gcp_project = os.environ.get("GCP_PROJECT")
+        if api_key:
+            return Gemini(api_key=api_key, model_name=args.model)
+        elif gcp_project:
+            location = os.environ.get("GCP_LOCATION", "global")
+            return Vertex(project=gcp_project, location=location, model_name=args.model)
+        else:
+            log.error(
+                "Either GEMINI_API_KEY or GCP_PROJECT env var is required for gemini provider"
+            )
+            sys.exit(1)
+    else:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            log.warning("OPENAI_API_KEY not set. Assuming proxy/setup handles auth.")
+        return OpenAI(
+            api_key=api_key or "", base_url=args.base_url, model_name=args.model
+        )
 
 
 def main(args):
@@ -40,6 +66,10 @@ def main(args):
 
     local_dict = load_local_dict(dict_path)
 
+    llm = None
+    if args.verify:
+        llm = _build_llm(args)
+
     try:
         process_epub(
             input_path=args.input,
@@ -47,10 +77,10 @@ def main(args):
             skip_words=skip_words,
             local_dict=local_dict,
             dict_path=dict_path,
-            verify=args.verify,
+            llm=llm,
             contextual=args.contextual,
-            provider=args.provider,
-            model=args.model,
+            concurrency=args.concurrency,
+            batch_size=args.batch_size,
         )
     except KeyboardInterrupt:
         log.warning(
@@ -103,6 +133,23 @@ def cli():
         "--model",
         default="gemini-3.1-flash-lite-preview",
         help="LLM model name to use for verification.",
+    )
+    p.add_argument(
+        "--base-url",
+        default=None,
+        help="Custom base URL for OpenAI-compatible providers (e.g. DeepSeek, vLLM).",
+    )
+    p.add_argument(
+        "--concurrency",
+        type=int,
+        default=5,
+        help="Max parallel LLM requests during verification (default: 5). Lower for rate-limited APIs.",
+    )
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="Number of words to send in a single LLM request (default: 100). Lower for faster feedback.",
     )
     p.add_argument("--verbose", "-v", action="store_true")
 

@@ -55,10 +55,10 @@ def process_epub(
     skip_words: set[str],
     local_dict: dict[str, str],
     dict_path: str,
-    verify: bool = False,
+    llm=None,
     contextual: bool = False,
-    provider: str = "gemini",
-    model: str = "gemini-3.1-flash-lite-preview",
+    concurrency: int = 5,
+    batch_size: int = 100,
 ):
     """
     Main orchestration pipeline to unrar an EPUB, tokenize text and defer ruby injections,
@@ -110,21 +110,7 @@ def process_epub(
                 log.warning("Skipping %s: %s", rel, e)
                 continue
 
-        if verify and grouped_candidates:
-            gcp_project = None
-            gcp_location = None
-            if provider == "gemini":
-                gcp_project = os.environ.get("GCP_PROJECT")
-                gcp_location = os.environ.get("GCP_LOCATION", "global")
-                if not gcp_project:
-                    log.error("GCP_PROJECT env var required when using gemini provider")
-                    return
-            else:
-                if not os.environ.get("OPENAI_API_KEY"):
-                    log.warning(
-                        "OPENAI_API_KEY env var not set. Assuming your proxy/setup handles auth..."
-                    )
-
+        if llm and grouped_candidates:
             log.info(
                 "Pass 1: Verifying %d unique candidate groups...",
                 len(grouped_candidates),
@@ -133,13 +119,12 @@ def process_epub(
                 grouped_candidates,
                 tokenizer.local_dict,
                 dict_path,
-                provider,
-                model,
+                llm,
                 save_fn=save_local_dict,
-                gcp_project=gcp_project,
-                gcp_location=gcp_location,
+                concurrency=concurrency,
+                batch_size=batch_size,
             )
-        elif verify:
+        elif llm:
             log.info("No words found that require verification.")
 
         log.info("Pass 2: Applying deferred ruby injections...")
