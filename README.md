@@ -75,6 +75,7 @@ export GEMINI_API_KEY="your-api-key"
 ```bash
 export GCP_PROJECT="your-project-id"
 export GCP_LOCATION="us-central1"
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
 ```
 
 **OpenAI**

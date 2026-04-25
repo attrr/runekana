@@ -305,12 +305,13 @@ def verify_candidates(
 
     candidates_objs = []
     cand_to_key = {}
-    for k in grouped_candidates:
+    for k, refs in grouped_candidates.items():
         if len(k) == 3:
             w, r, c = k
         else:
             w, r = k
-            c = ""
+            # Non-contextual mode: use context from first occurrence
+            c = refs[0][1] if refs else ""
         cand = Candidate(word=w, reading=r, context=c)
         candidates_objs.append(cand)
         cand_to_key[id(cand)] = k
