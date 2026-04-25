@@ -196,9 +196,6 @@ class Token(BaseModel):
 class Tokenizer:
     """Sudachi-based tokenizer with support for compound word modes."""
 
-    # Kanji numerals — universally known, noisy when annotated.
-    KANJI_NUMERALS = frozenset("一二三四五六七八九十百千万億兆")
-
     def __init__(
         self,
         skip_words: set[str],
@@ -235,7 +232,7 @@ class Tokenizer:
                 pass
             elif surface in self.skip_words or (m.dictionary_form() in self.skip_words):
                 pass
-            elif all(c in self.KANJI_NUMERALS for c in surface):
+            elif m.part_of_speech()[1] == "数詞" and not self.is_ambiguous(surface):
                 pass
             elif surface in self.local_dict:
                 reading = self.local_dict[surface]

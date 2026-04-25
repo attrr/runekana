@@ -21,11 +21,17 @@ SKIP_TAGS = frozenset(
         f"{{{XHTML_NS}}}ruby",
         f"{{{XHTML_NS}}}script",
         f"{{{XHTML_NS}}}style",
+        f"{{{XHTML_NS}}}title",
+        f"{{{XHTML_NS}}}head",
+        f"{{{XHTML_NS}}}nav",
         "rt",
         "rp",
         "ruby",
         "script",
         "style",
+        "title",
+        "head",
+        "nav",
     ]
 )
 
