@@ -1,0 +1,28 @@
+# Ignore everything by default
+*
+
+# Whitelist specific root configuration files
+!.gitignore
+!*.md
+!LICENSE
+!.envrc
+!.python-version
+!*.nix
+!*.lock
+!pyproject.toml
+
+# Whitelist the entire src directory tree
+!src/
+!src/**
+
+# Explicitly re-ignore common artifacts and caches 
+# that might be generated inside whitelisted directories
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+.direnv/
+dist/
+build/
+result
