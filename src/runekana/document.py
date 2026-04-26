@@ -4,15 +4,16 @@ import re
 import tempfile
 import zipfile
 import logging
-from typing import Iterator, Optional, Callable
+from typing import Iterator, Optional
+from runekana import console
 
 from lxml import etree
 
-from .tokenizer import Tokenizer, save_local_dict
-from .llm import verify_candidates, VerificationJob, LLM
-from .inject import DomTraverser
+from runekana.tokenizer import Tokenizer, save_local_dict
+from runekana.llm import verify_candidates, VerificationJob, LLM
+from runekana.inject import DomTraverser
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("runekana.io")
 
 # Replicating original xhtml.py constants related to serialization
 XHTML_NS = "http://www.w3.org/1999/xhtml"
@@ -179,6 +180,7 @@ class EpubArchive:
         Orchestrate the annotation pipeline: Scan, Verify, and Inject.
         Returns total number of corrections applied.
         """
+        console.print("[bold blue]Scanning XHTML documents...[/bold blue]")
         all_tasks = []
         jobs_map = {}
 
@@ -210,7 +212,9 @@ class EpubArchive:
 
         # Verify difficult readings with LLM if provided
         if llm and all_jobs:
-            log.info("Verifying %d unique candidate groups...", len(all_jobs))
+            console.print(
+                f"[bold cyan]Verifying {len(all_jobs)} candidate groups via {llm.provider}...[/bold cyan]"
+            )
             corrections = verify_candidates(
                 all_jobs,
                 self.tokenizer.local_dict,
@@ -223,11 +227,11 @@ class EpubArchive:
                 price_output=price_output,
             )
         elif llm:
-            log.info("No words found that require verification.")
+            console.print("[yellow]No words found that require verification.[/yellow]")
 
         # Execute ruby injections into the DOM
         if all_tasks:
-            log.info("Applying ruby injections...")
+            console.print("[bold magenta]Applying ruby injections...[/bold magenta]")
             for task in all_tasks:
                 task.apply()
 
@@ -237,4 +241,7 @@ class EpubArchive:
             log.info("Writing: %s", rel_path)
             doc.save()
 
+        console.print(
+            f"[bold green]Success![/bold green] Applied {corrections} corrections."
+        )
         return corrections

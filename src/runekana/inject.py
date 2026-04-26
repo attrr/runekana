@@ -7,8 +7,8 @@ from lxml import etree
 from lxml.builder import ElementMaker
 import jaconv
 
-from .text import has_kanji, split_okurigana
-from .tokenizer import Tokenizer, Token
+from runekana.text import has_kanji, split_okurigana
+from runekana.tokenizer import Tokenizer, Token
 
 if TYPE_CHECKING:
     from .document import XhtmlDocument
@@ -17,7 +17,7 @@ XHTML_NS = "http://www.w3.org/1999/xhtml"
 SKIP_TAGS = {"ruby", "rt", "rp", "nav", "title", "head"}
 
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("runekana.io")
 E = ElementMaker(namespace=XHTML_NS)
 
 
@@ -54,12 +54,6 @@ class InjectionTask:
         nodes: list[Union[str, etree._Element]],
     ):
         """Helper to inject a mix of strings and Elements into a container at a specific index."""
-        current_idx = start_idx
-
-        # If the first node is text, it becomes the .text of the container (at start_idx)
-        # or the .tail of the element before start_idx.
-        # But wait, lxml's indexing is about children, not text.
-
         first_node = nodes[0]
         nodes_to_process = nodes
 

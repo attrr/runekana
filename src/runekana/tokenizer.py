@@ -13,9 +13,9 @@ import sqlite3
 import re
 
 from sudachipy import Dictionary, SplitMode
-from .text import has_kanji
+from runekana.text import has_kanji
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("runekana.text")
 
 
 class YomitanDB:
@@ -79,7 +79,6 @@ class YomitanDB:
 
     def import_dict(self, path: str):
         """Import Yomitan frequency dict from a ZIP file or directory to SQLite."""
-        log.info("Importing Yomitan frequency dictionary from %s...", path)
         all_entries = []
 
         if os.path.isdir(path):

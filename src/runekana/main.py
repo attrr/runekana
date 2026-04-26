@@ -12,6 +12,9 @@ import logging
 import os
 import sys
 
+from rich.logging import RichHandler
+
+from runekana import console
 from runekana.document import EpubArchive
 from runekana.llm import Gemini, Vertex, OpenAI, LLM
 from runekana.tokenizer import (
@@ -22,11 +25,7 @@ from runekana.tokenizer import (
     import_yomitan_dict,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s: %(message)s",
-)
-log = logging.getLogger(__name__)
+log = logging.getLogger("runekana")
 
 
 def _build_llm(args) -> LLM:
@@ -53,11 +52,33 @@ def _build_llm(args) -> LLM:
         )
 
 
+def setup_logging(verbosity: int):
+    """Configure logging levels for runekana and its dependencies."""
+    # Default to WARNING; each -v drops one level (INFO, DEBUG)
+    level = min(logging.WARNING, max(logging.DEBUG, logging.WARNING - verbosity * 10))
+
+    handler = RichHandler(
+        console=console,
+        rich_tracebacks=True,
+        show_path=verbosity > 1,
+        show_time=False,
+        markup=False,
+    )
+    handler.setLevel(level)
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers.clear()
+    root.addHandler(handler)
+
+
 def main(args):
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    setup_logging(args.verbose)
 
     if args.freq_dict:
+        console.print(
+            f"[bold blue]Importing frequency dictionary:[/bold blue] {args.freq_dict}"
+        )
         import_yomitan_dict(args.freq_dict)
 
     skip_words = build_skip_set(args.skip_top)
@@ -76,6 +97,7 @@ def main(args):
 
     tokenizer = Tokenizer(skip_words, local_dict)
 
+    console.print(f"[bold green]Processing EPUB:[/bold green] {args.input}")
     try:
         with EpubArchive(
             input_path=args.input, output_path=args.output, tokenizer=tokenizer
@@ -170,7 +192,13 @@ def cli():
         default=0.0,
         help="Price per 1M output tokens (USD). Used for cost estimation.",
     )
-    p.add_argument("--verbose", "-v", action="store_true")
+    p.add_argument(
+        "--verbose",
+        "-v",
+        action="count",
+        default=0,
+        help="Increase verbosity (-v, -vvv)",
+    )
 
     parsed_args = p.parse_args()
     main(parsed_args)

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel
 from openai import OpenAI as OpenAIClient
 from google import genai
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -27,9 +28,10 @@ from tenacity import (
     before_sleep_log,
 )
 
-from .text import has_kanji, split_okurigana
+from runekana import console
+from runekana.text import has_kanji, split_okurigana
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("runekana.llm")
 
 
 class Candidate(BaseModel):
@@ -358,10 +360,11 @@ def verify_candidates(
     Corrections are written into local_dict in-place AND applied to all Token instances in memory.
     """
     log.info(
-        "Sending %d unique words to %s (%s)...",
+        "Verifying %d unique words via %s (%s) in %d batches...",
         len(jobs),
         llm.provider,
         llm.model_name,
+        (len(jobs) + batch_size - 1) // batch_size,
     )
 
     corrections = 0
@@ -377,29 +380,45 @@ def verify_candidates(
     future_to_batch = {executor.submit(_worker, batch): batch for batch in batches}
 
     try:
-        completed = 0
-        for future in concurrent.futures.as_completed(future_to_batch):
-            completed += 1
-            log.info("-" * 60)
-            log.info(">> [ BATCH %d / %d COMPLETED ] <<", completed, len(batches))
-            job_batch, hints = future.result()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task_id = progress.add_task(
+                f"Verifying batches (0/{len(batches)})...", total=len(batches)
+            )
 
-            for hint in hints:
-                if 0 <= hint.id < len(job_batch):
-                    job = job_batch[hint.id]
-                    # Double check word matches to prevent LLM hallucinations with IDs
-                    if job.word == hint.word and job.apply_hint(hint, local_dict):
-                        corrections += 1
-                else:
-                    log.warning(
-                        "LLM returned invalid ID %d (batch size: %d)",
-                        hint.id,
-                        len(job_batch),
-                    )
+            completed = 0
+            for future in concurrent.futures.as_completed(future_to_batch):
+                completed += 1
+                progress.update(
+                    task_id,
+                    advance=1,
+                    description=f"Verifying batches ({completed}/{len(batches)})...",
+                )
 
-            # Save incrementally to prevent data loss if script is killed
-            if corrections > 0 and dict_path and save_fn:
-                save_fn(dict_path, local_dict)
+                log.info("-" * 60)
+                log.info(">> [ BATCH %d / %d COMPLETED ] <<", completed, len(batches))
+
+                job_batch, hints = future.result()
+                for hint in hints:
+                    if 0 <= hint.id < len(job_batch):
+                        job = job_batch[hint.id]
+                        # Double check word matches to prevent LLM hallucinations with IDs
+                        if job.word == hint.word and job.apply_hint(hint, local_dict):
+                            corrections += 1
+                    else:
+                        log.warning(
+                            "LLM returned invalid ID %d (batch size: %d)",
+                            hint.id,
+                            len(job_batch),
+                        )
+
+                # Save incrementally to prevent data loss if script is killed
+                if corrections > 0 and dict_path and save_fn:
+                    save_fn(dict_path, local_dict)
 
     except KeyboardInterrupt:
         log.warning("\nVerification interrupted by user! Cancelling pending tasks...")
@@ -409,11 +428,14 @@ def verify_candidates(
         raise
     finally:
         executor.shutdown(wait=False)
-        log.info(llm.fetch_statistics(price_input, price_output))
+        stats = llm.fetch_statistics(price_input, price_output)
+        if stats:
+            console.print(
+                f"\n[bold yellow]LLM Usage Statistics:[/bold yellow]\n{stats}"
+            )
 
-    log.info(
-        "Verification complete. Applied %d total corrections to local dictionary.",
-        corrections,
+    console.print(
+        f"[bold green]Verification complete.[/bold green] Applied {corrections} corrections."
     )
     if corrections > 0 and dict_path:
         log.info("Final dictionary saved to %s", dict_path)

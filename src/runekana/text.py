@@ -4,7 +4,7 @@ from typing import Optional
 
 import jaconv
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("runekana.text")
 
 # regex
 kanji_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf々〇]"
@@ -13,7 +13,7 @@ kanji_regex = re.compile(rf"({kanji_pattern}+)")
 kanji_regex_once = re.compile(kanji_pattern)
 
 
-# text helper fucntion
+# text helper functions
 def has_kanji(text: str) -> bool:
     """Check if the string contains any Kanji characters."""
     return bool(kanji_regex_once.search(text))
