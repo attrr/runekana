@@ -12,6 +12,7 @@ dependencies = [
     "sudachipy>=0.6.10",
     "sudachidict-full>=20260116",
     "jaconv>=0.3.4",
+    "rich>=14.3.3",
 ]
 
 [project.scripts]

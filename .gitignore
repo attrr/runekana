@@ -10,6 +10,7 @@
 !*.nix
 !*.lock
 !pyproject.toml
+!debug_text.py
 
 # Whitelist the entire src directory tree
 !src/

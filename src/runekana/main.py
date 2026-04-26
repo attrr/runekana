@@ -12,9 +12,15 @@ import logging
 import os
 import sys
 
-from runekana.epub import process_epub
+from runekana.document import EpubArchive
 from runekana.llm import Gemini, Vertex, OpenAI, LLM
-from runekana.tokenizer import build_skip_set, load_local_dict, save_local_dict
+from runekana.tokenizer import (
+    build_skip_set,
+    load_local_dict,
+    save_local_dict,
+    Tokenizer,
+    import_yomitan_dict,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,8 +58,6 @@ def main(args):
         logging.getLogger().setLevel(logging.DEBUG)
 
     if args.freq_dict:
-        from runekana.tokenizer import import_yomitan_dict
-
         import_yomitan_dict(args.freq_dict)
 
     skip_words = build_skip_set(args.skip_top)
@@ -70,25 +74,28 @@ def main(args):
     if args.verify:
         llm = _build_llm(args)
 
+    tokenizer = Tokenizer(skip_words, local_dict)
+
     try:
-        process_epub(
-            input_path=args.input,
-            output_path=args.output,
-            skip_words=skip_words,
-            local_dict=local_dict,
-            dict_path=dict_path,
-            llm=llm,
-            contextual=args.contextual,
-            concurrency=args.concurrency,
-            batch_size=args.batch_size,
-        )
+        with EpubArchive(
+            input_path=args.input, output_path=args.output, tokenizer=tokenizer
+        ) as archive:
+            archive.process(
+                dict_path=dict_path,
+                llm=llm,
+                contextual=args.contextual,
+                concurrency=args.concurrency,
+                batch_size=args.batch_size,
+                price_input=args.price_input,
+                price_output=args.price_output,
+            )
     except KeyboardInterrupt:
         log.warning(
             "\nProcess interrupted by user (Ctrl-C). Gracefully shutting down..."
         )
         log.info("Saving progress to %s before exiting...", dict_path)
         save_local_dict(dict_path, local_dict)
-        os._exit(130)
+        sys.exit(130)
 
 
 def cli():
@@ -150,6 +157,18 @@ def cli():
         type=int,
         default=100,
         help="Number of words to send in a single LLM request (default: 100). Lower for faster feedback.",
+    )
+    p.add_argument(
+        "--price-input",
+        type=float,
+        default=0.0,
+        help="Price per 1M input tokens (USD). Used for cost estimation.",
+    )
+    p.add_argument(
+        "--price-output",
+        type=float,
+        default=0.0,
+        help="Price per 1M output tokens (USD). Used for cost estimation.",
     )
     p.add_argument("--verbose", "-v", action="store_true")
 

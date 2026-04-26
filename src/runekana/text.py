@@ -28,6 +28,11 @@ def chunk_by_kanji(text: str) -> list[tuple[str, bool]]:
     ]
 
 
+def normalize_kana(text: str) -> str:
+    """Normalize Katakana to Hiragana for alignment."""
+    return jaconv.kata2hira(text)
+
+
 def split_okurigana(surface: str, reading: str) -> list[tuple[str, Optional[str]]]:
     """
     Split a word into (text, ruby_or_None) segments.
@@ -40,28 +45,36 @@ def split_okurigana(surface: str, reading: str) -> list[tuple[str, Optional[str]
 
     chunks = chunk_by_kanji(surface)
     chunks = chunks[::-1]
-    remaining = jaconv.kata2hira(reading)
+
+    remaining = normalize_kana(reading)
 
     segments: list[tuple[str, Optional[str]]] = []
     for idx, (chunk, is_kanji) in enumerate(chunks):
         if not is_kanji:
             # Non-kanji: strip from back of remaining reading, emit bare
-            if not remaining.endswith(chunk):
-                log.debug("Kana mismatch: remaining=%r chunk=%r", remaining, chunk)
-                return [(surface, None)]
+            norm_chunk = normalize_kana(chunk)
+            if not remaining.endswith(norm_chunk):
+                log.debug(
+                    "Kana mismatch: surface=%r, remaining=%r chunk=%r (normalized=%r)",
+                    surface,
+                    remaining,
+                    chunk,
+                    norm_chunk,
+                )
+                return [(surface, reading)]
 
-            remaining = remaining[: -len(chunk)]
+            remaining = remaining[: -len(norm_chunk)]
             segments.insert(0, (chunk, None))
             continue
 
         # Kanji chunk: find where the previous non-kanji anchor starts in remaining
         anchor = None
         if idx + 1 < len(chunks):
-            anchor = jaconv.kata2hira(chunks[idx + 1][0])
+            anchor = normalize_kana(chunks[idx + 1][0])
 
         if anchor is not None:
             # Skip at least len(chunk) chars (1 reading char per kanji minimum)
-            pos = remaining.rfind(anchor)
+            pos = remaining.rfind(anchor, 0, len(remaining) - len(chunk))
             if pos < 0:
                 log.debug(
                     "Okurigana sync failed: surface=%r reading=%r "
@@ -71,12 +84,12 @@ def split_okurigana(surface: str, reading: str) -> list[tuple[str, Optional[str]
                     anchor,
                     remaining,
                 )
-                return [(surface, None)]
+                return [(surface, reading)]
             anchor_end = pos + len(anchor)
             kanji_reading = remaining[anchor_end:]
             remaining = remaining[:anchor_end]
         else:
-            # Fist chunk, take everything left
+            # First chunk, take everything left
             kanji_reading = remaining
             remaining = ""
 
@@ -91,6 +104,6 @@ def split_okurigana(surface: str, reading: str) -> list[tuple[str, Optional[str]
             reading,
             remaining,
         )
-        return [(surface, None)]
+        return [(surface, reading)]
 
     return segments

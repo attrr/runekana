@@ -12,7 +12,8 @@ import random
 import time
 import re
 import concurrent.futures
-from typing import Optional
+from typing import Optional, Any
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 from openai import OpenAI as OpenAIClient
@@ -26,12 +27,15 @@ from tenacity import (
     before_sleep_log,
 )
 
+from .text import has_kanji, split_okurigana
+
 log = logging.getLogger(__name__)
 
 
 class Candidate(BaseModel):
     """Input structure for a reading candidate and its context."""
 
+    id: int
     word: str
     reading: str
     context: str
@@ -40,6 +44,7 @@ class Candidate(BaseModel):
 class Hint(BaseModel):
     """Output structure for a model-suggested reading."""
 
+    id: int
     word: str
     proposed: str
     is_correct: bool
@@ -66,9 +71,10 @@ class LLM(ABC):
             2. 対象単語の活用形や送り仮名を「絶対に」勝手に変更・補完しないでください。（例：「学ん」という単語に対し「まなった」や「学んだ」と補完して答えるのは禁止です。必ず元の形のまま「まなん」と答えてください）
             3. 原文の平仮名部分と、読みの平仮名部分は完全に一致している必要があります。
             4. 小説のルビであるため、一般的に広く使われる慣用読みや訓読（例：「半年前」を「はんとしまえ」と読むなど）を、不必要に硬い音読（「はんとしぜん」など）に過剰修正しないでください。元の読みが日本語の口語として自然に通用するものであれば、そのまま正しいと判定してください。
+            5. 提供された各項目の「id」は、回答の際にも必ずそのまま保持してください。
 
             以下のJSON形式で回答してください:
-            {"hints": [{"word": "対象語", "proposed": "提示読み", "is_correct": true/false, "correction": "修正読みまたはnull"}]}
+            {"hints": [{"id": 0, "word": "対象語", "proposed": "提示読み", "is_correct": true/false, "correction": "修正読みまたはnull"}]}
 
             検証対象:
         """
@@ -83,18 +89,31 @@ class LLM(ABC):
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
 
-    def fetch_statistics(self) -> str:
+    def fetch_statistics(
+        self, price_input: float = 0.0, price_output: float = 0.0
+    ) -> str:
         """Return token usage statistics in a multi-line formatted report.
         Generate a summary of token usage and costs."""
         total = self.input_tokens + self.output_tokens
-        return (
+        if total == 0:
+            return ""
+
+        report = (
             f"\n=== {self.provider} API Usage ===\n"
             f" Model: {self.model_name}\n"
             f" Input Tokens:      {self.input_tokens}\n"
             f" Output Tokens:     {self.output_tokens}\n"
             f" Total Tokens:      {total}\n"
-            f"========================="
         )
+
+        if price_input > 0 or price_output > 0:
+            cost_in = (self.input_tokens / 1_000_000) * price_input
+            cost_out = (self.output_tokens / 1_000_000) * price_output
+            total_cost = cost_in + cost_out
+            report += f" Estimated Cost:    ${total_cost:.4f}\n"
+
+        report += "========================="
+        return report
 
     @abstractmethod
     def predict(self, prompt: str) -> str:
@@ -163,8 +182,7 @@ class LLM(ABC):
 
         # build prompt
         words = "\n".join(
-            f"{i+1}. {w.word} → {w.reading}  (文脈: ...{w.context}...)"
-            for i, w in enumerate(l)
+            f"{c.id}. {c.word} → {c.reading}  (文脈: ...{c.context}...)" for c in l
         )
         prompt = self.prompt + words
 
@@ -275,14 +293,64 @@ class OpenAI(LLM):
             return []
 
 
+@dataclass
+class VerificationJob:
+    """Domain object representing a unique word/reading verification task and its DOM token references."""
+
+    word: str
+    proposed_reading: str
+    context: str
+    token_refs: list[Any] = field(default_factory=list)
+
+    def to_candidate(self, id: int) -> Candidate:
+        """Create the payload for the LLM request."""
+        return Candidate(
+            id=id, word=self.word, reading=self.proposed_reading, context=self.context
+        )
+
+    def apply_hint(self, hint: Hint, local_dict: dict[str, str]) -> bool:
+        """Apply LLM correction back to local dict and DOM tokens. Returns True if applied."""
+        if not hint.is_correct and hint.correction and hint.correction != hint.proposed:
+            # Validate okurigana sync to prevent LLM hallucination (e.g., 仰い: おっしゃい -> あおぎ)
+            if has_kanji(hint.word):
+                segments = split_okurigana(hint.word, hint.correction)
+                if len(segments) == 1:
+                    _text_part, ruby_part = segments[0]
+                    if ruby_part is None:
+                        log.warning(
+                            "  Rejected LLM correction: %s (%s -> %s) due to okurigana mismatch.",
+                            hint.word,
+                            hint.proposed,
+                            hint.correction,
+                        )
+                        return False
+
+            log.info(
+                "  Correction: %s (%s -> %s)",
+                hint.word,
+                hint.proposed,
+                hint.correction,
+            )
+            if self.context:
+                log.debug("    Context: %s", self.context)
+
+            local_dict[hint.word] = hint.correction
+            for token in self.token_refs:
+                token.reading = hint.correction
+            return True
+        return False
+
+
 def verify_candidates(
-    grouped_candidates: dict[tuple, list],
+    jobs: list[VerificationJob],
     local_dict: dict[str, str],
     dict_path: str,
     llm: LLM,
     save_fn=None,
     concurrency: int = 5,
     batch_size: int = 100,
+    price_input: float = 0.0,
+    price_output: float = 0.0,
 ) -> int:
     """
     Verify reading candidates via LLM in parallel batches.
@@ -291,32 +359,22 @@ def verify_candidates(
     """
     log.info(
         "Sending %d unique words to %s (%s)...",
-        len(grouped_candidates),
+        len(jobs),
         llm.provider,
         llm.model_name,
     )
 
-    candidates_objs = []
-    cand_to_key = {}
-    for k, refs in grouped_candidates.items():
-        if len(k) == 3:
-            w, r, c = k
-        else:
-            w, r = k
-            # Non-contextual mode: use context from first occurrence
-            c = refs[0][1] if refs else ""
-        cand = Candidate(word=w, reading=r, context=c)
-        candidates_objs.append(cand)
-        cand_to_key[id(cand)] = k
-
     corrections = 0
-    batches = [
-        candidates_objs[i : i + batch_size]
-        for i in range(0, len(candidates_objs), batch_size)
-    ]
+    batches = [jobs[i : i + batch_size] for i in range(0, len(jobs), batch_size)]
+
+    def _worker(
+        job_batch: list[VerificationJob],
+    ) -> tuple[list[VerificationJob], list[Hint]]:
+        cands = [job.to_candidate(i) for i, job in enumerate(job_batch)]
+        return job_batch, llm.infer(cands)
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=concurrency)
-    future_to_batch = {executor.submit(llm.infer, batch): batch for batch in batches}
+    future_to_batch = {executor.submit(_worker, batch): batch for batch in batches}
 
     try:
         completed = 0
@@ -324,43 +382,20 @@ def verify_candidates(
             completed += 1
             log.info("-" * 60)
             log.info(">> [ BATCH %d / %d COMPLETED ] <<", completed, len(batches))
-            hints = future.result()
-            batch = future_to_batch[future]
+            job_batch, hints = future.result()
 
-            def apply_hint(cand: Candidate, hint: Hint):
-                nonlocal corrections
-                if (
-                    not hint.is_correct
-                    and hint.correction
-                    and hint.correction != hint.proposed
-                ):
-                    ref_list = grouped_candidates[cand_to_key[id(cand)]]
-                    first_context = ref_list[0][1] if ref_list else ""
-                    ctx = cand.context or first_context
-
-                    log.info(
-                        "  Correction: %s (%s -> %s)",
-                        hint.word,
-                        hint.proposed,
-                        hint.correction,
+            for hint in hints:
+                if 0 <= hint.id < len(job_batch):
+                    job = job_batch[hint.id]
+                    # Double check word matches to prevent LLM hallucinations with IDs
+                    if job.word == hint.word and job.apply_hint(hint, local_dict):
+                        corrections += 1
+                else:
+                    log.warning(
+                        "LLM returned invalid ID %d (batch size: %d)",
+                        hint.id,
+                        len(job_batch),
                     )
-                    if ctx:
-                        log.debug("    Context: %s", ctx)
-
-                    local_dict[hint.word] = hint.correction
-                    corrections += 1
-                    for token, _ in ref_list:
-                        token.reading = hint.correction
-
-            if len(hints) == len(batch):
-                for cand, hint in zip(batch, hints):
-                    apply_hint(cand, hint)
-            else:
-                hint_map = {(h.word, h.proposed): h for h in hints}
-                for cand in batch:
-                    hint = hint_map.get((cand.word, cand.reading))
-                    if hint:
-                        apply_hint(cand, hint)
 
             # Save incrementally to prevent data loss if script is killed
             if corrections > 0 and dict_path and save_fn:
@@ -374,6 +409,7 @@ def verify_candidates(
         raise
     finally:
         executor.shutdown(wait=False)
+        log.info(llm.fetch_statistics(price_input, price_output))
 
     log.info(
         "Verification complete. Applied %d total corrections to local dictionary.",
@@ -382,5 +418,4 @@ def verify_candidates(
     if corrections > 0 and dict_path:
         log.info("Final dictionary saved to %s", dict_path)
 
-    log.info(llm.fetch_statistics())
     return corrections

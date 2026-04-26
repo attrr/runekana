@@ -1,4 +1,5 @@
 from __future__ import annotations
+import csv
 import logging
 from typing import Optional
 
@@ -84,29 +85,26 @@ class YomitanDB:
         if os.path.isdir(path):
             bank_files = glob.glob(os.path.join(path, "term_meta_bank_*.json"))
             for fpath in bank_files:
-                with open(fpath, encoding="utf-8") as f:
-                    try:
-                        data = json.load(f)
-                        all_entries.extend(self._parse_bank(data))
-                    except Exception as e:
-                        log.warning("Failed to parse %s: %s", fpath, e)
+                try:
+                    with open(fpath, "rb") as f:
+                        all_entries.extend(self._parse_bank(json.load(f)))
+                except Exception as e:
+                    log.warning("Failed to parse %s: %s", fpath, e)
+
         elif zipfile.is_zipfile(path):
             with zipfile.ZipFile(path, "r") as zf:
                 for name in zf.namelist():
-                    if name.startswith("term_meta_bank_") and name.endswith(".json"):
+                    if not (
+                        name.startswith("term_meta_bank_") and name.endswith(".json")
+                    ):
+                        continue
+                    try:
                         with zf.open(name) as f:
-                            try:
-                                import io
-
-                                text_f = io.TextIOWrapper(f, encoding="utf-8")
-                                data = json.load(text_f)
-                                all_entries.extend(self._parse_bank(data))
-                            except Exception as e:
-                                log.warning("Failed to parse %s from zip: %s", name, e)
+                            all_entries.extend(self._parse_bank(json.load(f)))
+                    except Exception as e:
+                        log.warning("Failed to parse %s from zip: %s", name, e)
         else:
-            log.error(
-                "Provided frequency dict path is neither a directory nor a ZIP file."
-            )
+            log.error("Provided path is neither a directory nor a ZIP file: %s", path)
             return
 
         if not all_entries:
@@ -167,12 +165,16 @@ def load_local_dict(path: Optional[str]) -> dict[str, str]:
     if not path or not os.path.exists(path):
         return {}
     d = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "\t" in line:
-                word, reading = line.split("\t", 1)
-                d[word] = reading
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            # Filter comments and empty lines
+            filtered = (line for line in f if line.strip() and not line.startswith("#"))
+            reader = csv.reader(filtered, delimiter="\t")
+            for row in reader:
+                if len(row) >= 2:
+                    d[row[0]] = row[1]
+    except Exception as e:
+        log.warning("Failed to load local dict %s: %s", path, e)
     log.info("Loaded %d entries from local dictionary %s", len(d), path)
     return d
 
@@ -180,11 +182,12 @@ def load_local_dict(path: Optional[str]) -> dict[str, str]:
 def save_local_dict(path: str, local_dict: dict[str, str]):
     """Save local dictionary sorted by key."""
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f, delimiter="\t", quoting=csv.QUOTE_MINIMAL)
             for w, r in sorted(local_dict.items()):
-                f.write(f"{w}\t{r}\n")
+                writer.writerow([w, r])
     except OSError as e:
-        log.warning("Could not save local dict: %s", e)
+        log.warning("Could not save local dict %s: %s", path, e)
 
 
 class Token(BaseModel):

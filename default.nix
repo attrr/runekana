@@ -19,6 +19,7 @@ python3Packages.buildPythonApplication {
     tenacity
     openai
     pydantic
+    rich
     jaconv
     sudachipy
     sudachidict-full
