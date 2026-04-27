@@ -92,10 +92,9 @@ class InjectionTask:
         nodes = []
         for text, ruby in segments:
             if ruby and ruby != jaconv.kata2hira(text):
-                # Using E builder for clean, namespaced element creation
                 nodes.append(E.ruby(text, E.rt(ruby)))
             else:
-                # Merge consecutive text nodes
+                # is text only and last element is text only, merge those two
                 if nodes and isinstance(nodes[-1], str):
                     nodes[-1] += text
                 else:
@@ -196,12 +195,10 @@ class DomTraverser:
                 )
 
     def _traverse_node(self, elem: etree._Element, inside_skip: bool):
-        """Recursive traversal of the DOM tree to find text nodes."""
-        # If current element is a skip tag, we enter "skip mode" for this node and its children
+        """Recursive DOM traversal; respects SKIP_TAGS and existing ruby."""
         is_skip_tag = self._should_skip_element(elem)
         current_inside_skip = inside_skip or is_skip_tag
 
-        # Process text ONLY if we are not inside any skip tag (inherited or current)
         if not current_inside_skip:
             if elem.text:
                 self._process_node_text(
@@ -215,9 +212,8 @@ class DomTraverser:
             if isinstance(child.tag, str):
                 self._traverse_node(child, current_inside_skip)
 
-            # Process tail ONLY if we are not inside a skip tag
-            # Note: child's tail belongs to the parent's content flow.
             if not current_inside_skip and child.tail:
+                # Tail belongs to the parent's content flow
                 self._process_node_text(
                     target_elem=child,
                     attr="tail",

@@ -68,7 +68,6 @@ class XhtmlDocument:
         }
         current = elem
         while current is not None:
-            # Use QName to safely handle namespaced tags like {http://...}p
             if isinstance(current.tag, str):
                 tag_name = etree.QName(current.tag).localname.lower()
                 if tag_name in block_tags:
