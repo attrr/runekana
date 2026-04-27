@@ -5,12 +5,12 @@ import tempfile
 import zipfile
 import logging
 from typing import Iterator, Optional
-from runekana import console
 
 from lxml import etree
 
+from runekana import console
 from runekana.tokenizer import Tokenizer, save_local_dict
-from runekana.llm import verify_candidates, VerificationJob, LLM
+from runekana.llm import Verifier, VerificationJob, LLM
 from runekana.inject import DomTraverser
 
 log = logging.getLogger("runekana.io")
@@ -218,17 +218,19 @@ class EpubArchive:
             console.print(
                 f"[bold cyan]Verifying {len(all_jobs)} candidate groups via {llm.provider}...[/bold cyan]"
             )
-            corrections = verify_candidates(
-                all_jobs,
-                self.tokenizer.local_dict,
-                dict_path,
-                llm,
+            # Instantiate and manage the Verifier object internally
+            verifier = Verifier(
+                llm=llm,
+                local_dict=self.tokenizer.local_dict,
+                dict_path=dict_path,
                 save_fn=save_local_dict,
                 concurrency=concurrency,
                 batch_size=batch_size,
                 price_input=price_input,
                 price_output=price_output,
             )
+            with verifier:
+                corrections = verifier.verify(all_jobs)
         elif llm:
             console.print("[yellow]No words found that require verification.[/yellow]")
 

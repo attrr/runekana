@@ -1,26 +1,25 @@
 """
 llm.py — LLM-based reading verification for furigana annotations.
 
-Exposes verify_candidates() as the single entry point.
+Exposes Verifier class for parallel batch verification.
 Supports Gemini (Vertex AI) and OpenAI-compatible providers.
 """
 
-from abc import ABC, abstractmethod
+import asyncio
 import textwrap
 import logging
 import random
-import time
 import re
-import concurrent.futures
-from typing import Optional, Any
+from abc import ABC, abstractmethod
+from typing import Optional, Any, Callable
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
-from openai import OpenAI as OpenAIClient
+from openai import AsyncOpenAI
 from google import genai
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from tenacity import (
-    retry,
+    AsyncRetrying,
     stop_after_attempt,
     wait_exponential,
     wait_random,
@@ -118,7 +117,7 @@ class LLM(ABC):
         return report
 
     @abstractmethod
-    def predict(self, prompt: str) -> str:
+    async def predict(self, prompt: str) -> str:
         """Execute a raw LLM request with retry and error handling."""
 
     @staticmethod
@@ -150,24 +149,23 @@ class LLM(ABC):
             for cls in type(e).__mro__
         )
 
-    def predict_with_retry(
+    async def predict_with_retry(
         self, prompt: str, sleep_min: float = 0.5, sleep_max: float = 2.5
     ) -> str:
-        """Execute a raw LLM request with retry and error handling."""
-        time.sleep(random.uniform(sleep_min, sleep_max))
+        """Execute a raw LLM request with async retry and error handling."""
+        await asyncio.sleep(random.uniform(sleep_min, sleep_max))
 
-        @retry(
+        async for attempt in AsyncRetrying(
             wait=wait_exponential(multiplier=1.5, min=2, max=120)
             + wait_random(min=0, max=3),
             stop=stop_after_attempt(8),
             retry=retry_if_exception(self.is_retryable),
             before_sleep=before_sleep_log(log, logging.WARNING, exc_info=True),
             reraise=True,
-        )
-        def _execute():
-            return self.predict(prompt)
-
-        return _execute()
+        ):
+            with attempt:
+                return await self.predict(prompt)
+        return ""
 
     def serialize_predict(self, s: str) -> list[Hint]:
         """Convert raw response string to a list of Hint objects."""
@@ -177,7 +175,7 @@ class LLM(ABC):
             log.warning(f"Failed to serialize prediction: {e}")
             return []
 
-    def infer(self, candidates: list[Candidate]) -> list[Hint]:
+    async def infer(self, candidates: list[Candidate]) -> list[Hint]:
         """Infer readings for candidates through the complete pipeline."""
         if not candidates:
             return []
@@ -189,8 +187,7 @@ class LLM(ABC):
         )
         prompt = self.prompt + words
 
-        # predict
-        response = self.predict_with_retry(prompt)
+        response = await self.predict_with_retry(prompt)
         log.debug("Raw response:\n%s", response[:500] if response else "(empty)")
         return self.serialize_predict(response)
 
@@ -207,10 +204,10 @@ class Vertex(LLM):
         super().__init__(model_name=model_name)
         self.client = genai.Client(vertexai=True, project=project, location=location)
 
-    def predict(self, prompt: str) -> str:
-        """Execute prediction using Vertex AI."""
+    async def predict(self, prompt: str) -> str:
+        """Execute async prediction using Vertex AI."""
         log.debug("Prompt:\n%s", prompt)
-        response = self.client.models.generate_content(
+        response = await self.client.aio.models.generate_content(
             model=self.model_name,
             contents=prompt,
             config={
@@ -250,20 +247,20 @@ class Gemini(Vertex):
 
 
 class OpenAI(LLM):
-    """OpenAI-compatible provider implementation."""
+    """OpenAI-compatible provider implementation using AsyncOpenAI."""
 
     def __init__(
         self, api_key: str, base_url: str | None = None, model_name: str = "gpt-4o-mini"
     ) -> None:
         super().__init__(model_name=model_name)
-        self.client = OpenAIClient(
+        self.client = AsyncOpenAI(
             api_key=api_key, base_url=base_url, max_retries=0, timeout=120.0
         )
 
-    def predict(self, prompt: str) -> str:
-        """Execute prediction using OpenAI-compatible API."""
+    async def predict(self, prompt: str) -> str:
+        """Execute async prediction using OpenAI-compatible API."""
         log.debug("Calling completions.create (model: %s)...", self.model_name)
-        response = self.client.chat.completions.create(
+        response = await self.client.chat.completions.create(
             model=self.model_name,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
@@ -344,102 +341,141 @@ class VerificationJob:
         return False
 
 
-def verify_candidates(
-    jobs: list[VerificationJob],
-    local_dict: dict[str, str],
-    dict_path: str,
-    llm: LLM,
-    save_fn=None,
-    concurrency: int = 5,
-    batch_size: int = 100,
-    price_input: float = 0.0,
-    price_output: float = 0.0,
-) -> int:
-    """
-    Verify reading candidates via LLM in parallel batches.
-    Returns number of corrections applied.
-    Corrections are written into local_dict in-place AND applied to all Token instances in memory.
-    """
-    log.info(
-        "Verifying %d unique words via %s (%s) in %d batches... (Avg context: %.1f chars)",
-        len(jobs),
-        llm.provider,
-        llm.model_name,
-        (len(jobs) + batch_size - 1) // batch_size,
-        sum(len(j.context) for j in jobs) / len(jobs) if jobs else 0,
-    )
+class Verifier:
+    """Orchestrator for parallel LLM verification batches. Supports context manager."""
 
-    corrections = 0
-    batches = [jobs[i : i + batch_size] for i in range(0, len(jobs), batch_size)]
+    def __init__(
+        self,
+        llm: LLM,
+        local_dict: dict[str, str],
+        dict_path: str,
+        save_fn: Optional[Callable[[str, dict], None]] = None,
+        concurrency: int = 5,
+        batch_size: int = 100,
+        price_input: float = 0.0,
+        price_output: float = 0.0,
+    ):
+        self.llm = llm
+        self.local_dict = local_dict
+        self.dict_path = dict_path
+        self.save_fn = save_fn
+        self.concurrency = concurrency
+        self.batch_size = batch_size
+        self.price_input = price_input
+        self.price_output = price_output
+        self.semaphore = asyncio.Semaphore(concurrency)
+        self.corrections = 0
+        self.completed_batches = 0
 
-    def _worker(
-        job_batch: list[VerificationJob],
-    ) -> tuple[list[VerificationJob], list[Hint]]:
-        cands = [job.to_candidate(i) for i, job in enumerate(job_batch)]
-        return job_batch, llm.infer(cands)
-
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=concurrency)
-    future_to_batch = {executor.submit(_worker, batch): batch for batch in batches}
-
-    try:
-        with Progress(
+        # Persistent progress bar, manually started during verification
+        self.progress = Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
             transient=True,
-        ) as progress:
-            task_id = progress.add_task(
-                f"Verifying batches (0/{len(batches)})...", total=len(batches)
-            )
+        )
+        self.current_task_id: Any = None
 
-            completed = 0
-            for future in concurrent.futures.as_completed(future_to_batch):
-                completed += 1
-                progress.update(
-                    task_id,
-                    advance=1,
-                    description=f"Verifying batches ({completed}/{len(batches)})...",
-                )
+    def __enter__(self):
+        return self
 
-                log.info("-" * 60)
-                log.info(">> [ BATCH %d / %d COMPLETED ] <<", completed, len(batches))
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Perform final cleanup and print statistics on exit."""
+        self.progress.stop()
 
-                job_batch, hints = future.result()
-                for hint in hints:
-                    if 0 <= hint.id < len(job_batch):
-                        job = job_batch[hint.id]
-                        # Double check word matches to prevent LLM hallucinations with IDs
-                        if job.word == hint.word and job.apply_hint(hint, local_dict):
-                            corrections += 1
-                    else:
-                        log.warning(
-                            "LLM returned invalid ID %d (batch size: %d)",
-                            hint.id,
-                            len(job_batch),
-                        )
-
-                # Save incrementally to prevent data loss if script is killed
-                if corrections > 0 and dict_path and save_fn:
-                    save_fn(dict_path, local_dict)
-
-    except KeyboardInterrupt:
-        log.warning("\nVerification interrupted by user! Cancelling pending tasks...")
-        for future in future_to_batch:
-            future.cancel()
-        executor.shutdown(wait=False)
-        raise
-    finally:
-        executor.shutdown(wait=False)
-        stats = llm.fetch_statistics(price_input, price_output)
+        stats = self.llm.fetch_statistics(self.price_input, self.price_output)
         if stats:
             console.print(
                 f"\n[bold yellow]LLM Usage Statistics:[/bold yellow]\n{stats}"
             )
 
-    console.print(
-        f"[bold green]Verification complete.[/bold green] Applied {corrections} corrections."
-    )
-    if corrections > 0 and dict_path:
-        log.info("Final dictionary saved to %s", dict_path)
+        if exc_type is None:
+            console.print(
+                f"[bold green]Verification complete.[/bold green] Applied {self.corrections} corrections."
+            )
 
-    return corrections
+    async def _run_batch(
+        self,
+        batch: list[VerificationJob],
+        batch_index: int,
+        total_batches: int,
+    ) -> int:
+        """Execute a single verification batch with concurrency control."""
+        async with self.semaphore:
+            cands = [job.to_candidate(i) for i, job in enumerate(batch)]
+            try:
+                hints = await self.llm.infer(cands)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.error("Batch %d failed: %s", batch_index, e)
+                hints = []
+
+            self.completed_batches += 1
+            if self.current_task_id is not None:
+                self.progress.update(
+                    self.current_task_id,
+                    advance=1,
+                    description=f"Verifying batches ({self.completed_batches}/{total_batches})...",
+                )
+
+            log.info("-" * 60)
+            log.info(">> [ BATCH %d / %d COMPLETED ] <<", batch_index, total_batches)
+
+            batch_corrections = 0
+            for hint in hints:
+                if 0 <= hint.id < len(batch):
+                    job = batch[hint.id]
+                    if job.word == hint.word and job.apply_hint(hint, self.local_dict):
+                        batch_corrections += 1
+                else:
+                    log.warning("LLM returned invalid ID %d", hint.id)
+
+            if batch_corrections > 0 and self.dict_path and self.save_fn:
+                self.save_fn(self.dict_path, self.local_dict)
+
+            return batch_corrections
+
+    async def _verify_async(self, jobs: list[VerificationJob]) -> int:
+        """Internal async orchestrator for all jobs."""
+        batches = [
+            jobs[i : i + self.batch_size] for i in range(0, len(jobs), self.batch_size)
+        ]
+        total_batches = len(batches)
+
+        self.current_task_id = self.progress.add_task(
+            f"Verifying batches ({self.completed_batches}/{total_batches})...",
+            total=total_batches,
+        )
+
+        tasks = [
+            self._run_batch(batch, i + 1, total_batches)
+            for i, batch in enumerate(batches)
+        ]
+
+        results = await asyncio.gather(*tasks)
+        self.corrections = sum(results)
+        return self.corrections
+
+    def verify(self, jobs: list[VerificationJob]) -> int:
+        """
+        Synchronous entry point that runs the async verification loop.
+        """
+        if not jobs or len(jobs) == 0:
+            return 0
+
+        # gathering info for logging
+        batchs_count = (len(jobs) + self.batch_size - 1) // self.batch_size
+        average_context = sum(len(j.context) for j in jobs) / len(jobs) if jobs else 0
+        log.info(
+            "Verifying %d unique words via %s (%s) in %d batches... (Avg context: %.1f chars)",
+            len(jobs),
+            self.llm.provider,
+            self.llm.model_name,
+            batchs_count,
+            average_context,
+        )
+
+        self.progress.start()
+        self.corrections = asyncio.run(self._verify_async(jobs))
+        return self.corrections

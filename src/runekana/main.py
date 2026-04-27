@@ -18,11 +18,10 @@ from runekana import console
 from runekana.document import EpubArchive
 from runekana.llm import Gemini, Vertex, OpenAI, LLM
 from runekana.tokenizer import (
-    build_skip_set,
     load_local_dict,
     save_local_dict,
     Tokenizer,
-    import_yomitan_dict,
+    YomitanDB,
 )
 
 log = logging.getLogger("runekana")
@@ -74,14 +73,15 @@ def setup_logging(verbosity: int):
 
 def main(args):
     setup_logging(args.verbose)
+    db = YomitanDB()
 
     if args.freq_dict:
         console.print(
             f"[bold blue]Importing frequency dictionary:[/bold blue] {args.freq_dict}"
         )
-        import_yomitan_dict(args.freq_dict)
+        db.import_dict(args.freq_dict)
 
-    skip_words = build_skip_set(args.skip_top)
+    skip_words = db.get_top_n(args.skip_top)
 
     if args.dict:
         dict_path = args.dict

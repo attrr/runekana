@@ -147,18 +147,6 @@ class YomitanDB:
         return words
 
 
-def import_yomitan_dict(path: str):
-    """Wrapper to import a Yomitan dictionary."""
-    db = YomitanDB()
-    db.import_dict(path)
-
-
-def build_skip_set(n: int) -> set[str]:
-    """Wrapper to retrieve the skip set."""
-    db = YomitanDB()
-    return db.get_top_n(n)
-
-
 def load_local_dict(path: Optional[str]) -> dict[str, str]:
     """Load local dictionary. Format: 漢字<TAB>よみがな per line."""
     if not path or not os.path.exists(path):
