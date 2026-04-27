@@ -19,6 +19,11 @@ def has_kanji(text: str) -> bool:
     return bool(kanji_regex_once.search(text))
 
 
+def is_kanji(text: str) -> bool:
+    """Check if the string consists only of Kanji characters."""
+    return bool(re.fullmatch(rf"{kanji_pattern}+", text))
+
+
 def chunk_by_kanji(text: str) -> list[tuple[str, bool]]:
     """Split text into chunks, tagging each as kanji (True) or not (False)."""
     return [

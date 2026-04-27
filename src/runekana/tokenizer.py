@@ -13,7 +13,7 @@ import sqlite3
 import re
 
 from sudachipy import Dictionary, SplitMode
-from runekana.text import has_kanji
+from runekana.text import has_kanji, is_kanji
 
 log = logging.getLogger("runekana.text")
 
@@ -212,25 +212,34 @@ class Tokenizer:
         Uses Sudachi's normalized reading form (SplitMode.C).
         """
         results = []
+        tokens = list(self.tokenizer.tokenize(text, SplitMode.C))
 
-        for m in self.tokenizer.tokenize(text, SplitMode.C):
+        for i, m in enumerate(tokens):
             surface = m.surface()
             reading = None
             to_verify = False
 
             if not has_kanji(surface):
+                results.append(Token(surface=surface, reading=None, to_verify=False))
+                continue
+
+            prev_is_kanji = i > 0 and is_kanji(tokens[i - 1].surface())
+            next_is_kanji = i < len(tokens) - 1 and is_kanji(tokens[i + 1].surface())
+            to_filter = not (is_kanji(surface) and (prev_is_kanji or next_is_kanji))
+
+            is_skip_word = (
+                surface in self.skip_words or m.dictionary_form() in self.skip_words
+            )
+            is_numeral = m.part_of_speech()[1] == "数詞"
+            is_numeral_unique = is_numeral and not self.is_ambiguous(surface)
+
+            if to_filter and (is_skip_word or is_numeral_unique):
                 pass
-            elif surface in self.skip_words or (m.dictionary_form() in self.skip_words):
-                pass
-            elif m.part_of_speech()[1] == "数詞" and not self.is_ambiguous(surface):
-                pass
-            elif surface in self.local_dict:
+            elif to_filter and surface in self.local_dict:
                 reading = self.local_dict[surface]
                 to_verify = self.is_ambiguous(surface)
             else:
                 reading = jaconv.kata2hira(m.reading_form())
                 to_verify = self.is_ambiguous(surface)
-
             results.append(Token(surface=surface, reading=reading, to_verify=to_verify))
-
         return results
