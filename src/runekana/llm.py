@@ -360,11 +360,12 @@ def verify_candidates(
     Corrections are written into local_dict in-place AND applied to all Token instances in memory.
     """
     log.info(
-        "Verifying %d unique words via %s (%s) in %d batches...",
+        "Verifying %d unique words via %s (%s) in %d batches... (Avg context: %.1f chars)",
         len(jobs),
         llm.provider,
         llm.model_name,
         (len(jobs) + batch_size - 1) // batch_size,
+        sum(len(j.context) for j in jobs) / len(jobs) if jobs else 0,
     )
 
     corrections = 0

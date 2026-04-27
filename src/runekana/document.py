@@ -34,14 +34,6 @@ VOID_ELEMENTS = {
 }
 
 
-def _fix_self_closing(m: re.Match[str]) -> str:
-    """Ensure void elements remain self-closing; others get explicit closing tags."""
-    tag = m.group(1)
-    if tag.lower() in VOID_ELEMENTS:
-        return f"<{tag}/>"
-    return f"<{tag}></{tag}>"
-
-
 class XhtmlDocument:
     """Represents an XHTML document parsed from an EPUB archive."""
 
@@ -89,30 +81,41 @@ class XhtmlDocument:
         text = "".join(current.itertext())
         return re.sub(r"\s+", " ", text).strip()
 
-    def save(self):
-        """Serialize the DOM back to disk, preserving DOCTYPE and XML declaration."""
-        # Find original DOCTYPE and xml declaration if any
-        header = b""
-        lines = self.original_bytes.split(b"\n")
-        for line in lines:
-            lower_line = line.lower()
-            if lower_line.startswith(b"<?xml") or lower_line.startswith(b"<!doctype"):
-                header += line + b"\n"
-            else:
-                break
+    @staticmethod
+    def _normalize_empty_tags(tree: etree._ElementTree | etree._Element):
+        """Ensure non-void elements are not self-closed by setting text to empty string."""
+        for elem in tree.iter():
+            if isinstance(elem.tag, str):
+                local_name = etree.QName(elem.tag).localname.lower()
+                if local_name not in VOID_ELEMENTS:
+                    if elem.text is None and len(elem) == 0:
+                        elem.text = ""
 
+    @staticmethod
+    def _extract_header(content: bytes) -> bytes:
+        """Extract document prolog (XML declaration, DOCTYPE, and comments before the root element)."""
+        match = re.search(b"<(?!\\?|!|!--)", content)
+        if match:
+            return content[: match.start()]
+        return b""
+
+    def save(self):
+        """Serialize the DOM back to disk, preserving original header and XHTML compatibility."""
+        self._normalize_empty_tags(self.tree)
+
+        # Serialize ONLY the root to avoid lxml re-inserting DOCTYPE from the tree object.
+        # NOTE: This ignores any trailing content (comments, whitespace) after the root 
+        # element in the original file, which is usually acceptable for EPUB documents.
         body_bytes = etree.tostring(
-            self.tree,
+            self.tree.getroot(),
             encoding="utf-8",
             xml_declaration=False,
             method="xml",
             pretty_print=False,
         )
 
-        body_text: str = body_bytes.decode("utf-8")
-        body_fixed = re.sub(r"<([^/\s>]+)\s*/>", _fix_self_closing, body_text)
-        output = header.decode("utf-8") + body_fixed
-
+        header = self._extract_header(self.original_bytes)
+        output = header.decode("utf-8") + body_bytes.decode("utf-8")
         with open(self.filepath, "w", encoding="utf-8", newline="") as f:
             f.write(output)
 
