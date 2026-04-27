@@ -30,28 +30,22 @@ jobs:
       fail-fast: false
       matrix:
         # Cross product of checks and specific system configurations
-        system: [ x86_64-linux, aarch64-linux, x86_64-darwin, aarch64-darwin ]
+        system: [ x86_64-linux, aarch64-linux, aarch64-darwin ]
         check: ${{ fromJson(needs.set-matrix.outputs.matrix) }}
         include:
           - system: x86_64-linux
             runner: ubuntu-latest
           - system: aarch64-linux
             runner: ubuntu-24.04-arm
-          - system: x86_64-darwin
-            runner: macos-13
           - system: aarch64-darwin
             runner: macos-latest
         # Exclude static analysis on non-Linux platforms to save resources
         exclude:
           - system: aarch64-linux
             check: ruff
-          - system: x86_64-darwin
-            check: ruff
           - system: aarch64-darwin
             check: ruff
           - system: aarch64-linux
-            check: pyright
-          - system: x86_64-darwin
             check: pyright
           - system: aarch64-darwin
             check: pyright
