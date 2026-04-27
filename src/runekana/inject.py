@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from .document import XhtmlDocument
 
 XHTML_NS = "http://www.w3.org/1999/xhtml"
-SKIP_TAGS = {"ruby", "rt", "rp", "nav", "title", "head"}
+SKIP_TAGS = {"ruby", "rt", "rp", "nav", "title", "head", "script", "style"}
 
 
 log = logging.getLogger("runekana.io")
@@ -142,7 +142,7 @@ class DomTraverser:
         self.doc = doc
         self.tasks.clear()
         self.candidates.clear()
-        self._traverse_node(doc.root, inside_ruby=False)
+        self._traverse_node(doc.root, inside_skip=False)
         return self.tasks, self.candidates
 
     def _should_skip_element(self, elem: etree._Element) -> bool:
@@ -195,14 +195,14 @@ class DomTraverser:
                     }
                 )
 
-    def _traverse_node(self, elem: etree._Element, inside_ruby: bool):
+    def _traverse_node(self, elem: etree._Element, inside_skip: bool):
         """Recursive traversal of the DOM tree to find text nodes."""
-        is_ruby = (
-            isinstance(elem.tag, str) and etree.QName(elem.tag).localname == "ruby"
-        )
-        current_inside_ruby = inside_ruby or is_ruby
+        # If current element is a skip tag, we enter "skip mode" for this node and its children
+        is_skip_tag = self._should_skip_element(elem)
+        current_inside_skip = inside_skip or is_skip_tag
 
-        if not current_inside_ruby and not self._should_skip_element(elem):
+        # Process text ONLY if we are not inside any skip tag (inherited or current)
+        if not current_inside_skip:
             if elem.text:
                 self._process_node_text(
                     target_elem=elem,
@@ -213,9 +213,11 @@ class DomTraverser:
 
         for child in list(elem):
             if isinstance(child.tag, str):
-                self._traverse_node(child, current_inside_ruby)
+                self._traverse_node(child, current_inside_skip)
 
-            if not current_inside_ruby and child.tail:
+            # Process tail ONLY if we are not inside a skip tag
+            # Note: child's tail belongs to the parent's content flow.
+            if not current_inside_skip and child.tail:
                 self._process_node_text(
                     target_elem=child,
                     attr="tail",

@@ -9,6 +9,7 @@ from runekana.tokenizer import (
     save_local_dict,
     Tokenizer,
 )
+from runekana.text import has_kanji
 
 
 @pytest.fixture
@@ -159,7 +160,64 @@ def test_tokenizer_compound_words():
     assert hikkoshi.reading == "ひっこし"
 
     # Check ambiguity for these compound words
-    # '打ち合わせ' is usually not ambiguous in its single-token form in Sudachi
-    # but '身体' is.
     assert tok.is_ambiguous("打ち合わせ") is False
     assert tok.is_ambiguous("引っ越し") is False
+
+
+def test_tokenizer_compound_skip_prevention():
+    """
+    Ensure kanji tokens in a compound are not skipped even if part of skip_words.
+    Example: '日本' in '全日本'.
+    """
+    tok = Tokenizer(skip_words={"日本"}, local_dict={})
+
+    results = tok.tokenize("全日本")
+
+    for token in results:
+        if has_kanji(token.surface):
+            assert token.reading is not None
+
+
+def test_tokenizer_numeric_handling():
+    """Test handling of numerals: unambiguous numerals should be skipped."""
+    tok = Tokenizer(skip_words=set(), local_dict={})
+
+    # '100円'
+    results = tok.tokenize("100円")
+    num_token = next(t for t in results if "100" in t.surface)
+    assert num_token.reading is None
+
+    # '三千円'
+    results2 = tok.tokenize("三千円")
+    sen_token = next(t for t in results2 if "三千" in t.surface)
+    if not tok.is_ambiguous(sen_token.surface):
+        assert sen_token.reading is None
+
+
+def test_tokenizer_complex_ambiguity():
+    """Test complex ambiguous words to ensure to_verify flag is correct."""
+    tok = Tokenizer(skip_words=set(), local_dict={})
+
+    # '行方' is ambiguous
+    assert tok.is_ambiguous("行方") is True
+
+    # '明日' is ambiguous
+    assert tok.is_ambiguous("明日") is True
+
+    # OOV words should be treated as ambiguous
+    assert tok.is_ambiguous("𠮷野家") is True
+
+
+def test_tokenizer_mixed_sentence():
+    """Test a mixed sentence with kana, kanji, and symbols."""
+    tok = Tokenizer(skip_words={"です", "ます"}, local_dict={})
+    text = "最新の技術を駆使して、高品質なサービスを提供します。"
+    results = tok.tokenize(text)
+
+    surfaces = [t.surface for t in results]
+    assert "最新" in surfaces
+    assert "技術" in surfaces
+    assert "提供" in surfaces
+
+    teikyo = next(t for t in results if t.surface == "提供")
+    assert teikyo.reading == "ていきょう"

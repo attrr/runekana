@@ -19,39 +19,39 @@ class MockTokenizer(Tokenizer):
 def xhtml_doc_mock():
     doc = MagicMock()
     doc.root = etree.fromstring(
-        f'<html xmlns="{XHTML_NS}"><body><p>汉字</p></body></html>'
+        f'<html xmlns="{XHTML_NS}"><body><p>漢字</p></body></html>'
     )
-    doc.get_block_text.return_value = "汉字"
+    doc.get_block_text.return_value = "漢字"
     return doc
 
 
 def test_dom_traverser_basic():
-    # Setup: "汉字" should be tokenized into one token with reading
-    token = Token(surface="汉字", reading="かんじ")
-    tokenizer = MockTokenizer({"汉字": [token]})
+    # Setup: "漢字" should be tokenized into one token with reading
+    token = Token(surface="漢字", reading="かんじ")
+    tokenizer = MockTokenizer({"漢字": [token]})
     traverser = DomTraverser(tokenizer)
 
     doc = MagicMock()
     doc.root = etree.fromstring(
-        f'<html xmlns="{XHTML_NS}"><body><p>汉字</p></body></html>'
+        f'<html xmlns="{XHTML_NS}"><body><p>漢字</p></body></html>'
     )
-    doc.get_block_text.return_value = "汉字"
+    doc.get_block_text.return_value = "漢字"
 
     tasks, candidates = traverser.traverse(doc)
 
     assert len(tasks) == 1
-    assert tasks[0].tokens[0].surface == "汉字"
+    assert tasks[0].tokens[0].surface == "漢字"
     assert tasks[0].attr == "text"
 
 
 def test_dom_traverser_skip_ruby():
-    # Setup: "汉字" inside a ruby tag should be skipped
+    # Setup: "漢字" inside a ruby tag should be skipped
     tokenizer = MockTokenizer({})
     traverser = DomTraverser(tokenizer)
 
     doc = MagicMock()
     doc.root = etree.fromstring(
-        f'<html xmlns="{XHTML_NS}"><body><p><ruby>汉字<rt>かんじ</rt></ruby></p></body></html>'
+        f'<html xmlns="{XHTML_NS}"><body><p><ruby>漢字<rt>かんじ</rt></ruby></p></body></html>'
     )
 
     tasks, candidates = traverser.traverse(doc)
@@ -60,15 +60,15 @@ def test_dom_traverser_skip_ruby():
 
 def test_dom_traverser_tail_text():
     # Setup: text after an element (tail)
-    token = Token(surface="汉字", reading="かんじ")
-    tokenizer = MockTokenizer({"汉字": [token]})
+    token = Token(surface="漢字", reading="かんじ")
+    tokenizer = MockTokenizer({"漢字": [token]})
     traverser = DomTraverser(tokenizer)
 
     doc = MagicMock()
     doc.root = etree.fromstring(
-        f'<html xmlns="{XHTML_NS}"><body><p><span>prefix</span>汉字</p></body></html>'
+        f'<html xmlns="{XHTML_NS}"><body><p><span>prefix</span>漢字</p></body></html>'
     )
-    doc.get_block_text.return_value = "prefix汉字"
+    doc.get_block_text.return_value = "prefix漢字"
 
     tasks, candidates = traverser.traverse(doc)
 
@@ -82,9 +82,9 @@ def test_dom_traverser_tail_text():
 
 
 def test_injection_task_apply_text():
-    # Setup a simple p tag with "汉字"
-    root = etree.fromstring(f'<p xmlns="{XHTML_NS}">汉字</p>')
-    token = Token(surface="汉字", reading="かんじ")
+    # Setup a simple p tag with "漢字"
+    root = etree.fromstring(f'<p xmlns="{XHTML_NS}">漢字</p>')
+    token = Token(surface="漢字", reading="かんじ")
     task = InjectionTask(elem=root, attr="text", tokens=[token])
 
     task.apply()
@@ -92,7 +92,7 @@ def test_injection_task_apply_text():
     # Check if ruby is injected
     ruby = root.find(f".//{{{XHTML_NS}}}ruby")
     assert ruby is not None
-    assert ruby.text == "汉字"
+    assert ruby.text == "漢字"
     assert len(ruby) > 0
     rt = ruby[0]
     assert rt.text == "かんじ"
@@ -100,11 +100,11 @@ def test_injection_task_apply_text():
 
 
 def test_injection_task_apply_mixed():
-    # Setup: "A汉字B" -> "A<ruby>汉字<rt>かんじ</rt></ruby>B"
-    root = etree.fromstring(f'<p xmlns="{XHTML_NS}">A汉字B</p>')
+    # Setup: "A漢字B" -> "A<ruby>漢字<rt>かんじ</rt></ruby>B"
+    root = etree.fromstring(f'<p xmlns="{XHTML_NS}">A漢字B</p>')
     tokens = [
         Token(surface="A"),
-        Token(surface="汉字", reading="かんじ"),
+        Token(surface="漢字", reading="かんじ"),
         Token(surface="B"),
     ]
     task = InjectionTask(elem=root, attr="text", tokens=tokens)
@@ -114,7 +114,7 @@ def test_injection_task_apply_mixed():
     assert root.text == "A"
     ruby = root.find(f"{{{XHTML_NS}}}ruby")
     assert ruby is not None
-    assert ruby.text == "汉字"
+    assert ruby.text == "漢字"
     assert ruby.tail == "B"
 
 
@@ -134,3 +134,33 @@ def test_injection_task_with_okurigana():
     rt = ruby[0]
     assert rt.text == "た"
     assert ruby.tail == "べる"
+
+
+def test_dom_traverser_skip_subtree():
+    # Setup: "漢字" inside a nav tag or head tag should be skipped entirely
+    tokenizer = MockTokenizer({"漢字": [Token(surface="漢字", reading="かんじ")]})
+    traverser = DomTraverser(tokenizer)
+
+    # 1. Test nav subtree
+    doc_nav = MagicMock()
+    doc_nav.root = etree.fromstring(
+        f'<html xmlns="{XHTML_NS}"><body><nav><div>漢字</div></nav></body></html>'
+    )
+    tasks_nav, _ = traverser.traverse(doc_nav)
+    assert len(tasks_nav) == 0
+
+    # 2. Test head subtree
+    doc_head = MagicMock()
+    doc_head.root = etree.fromstring(
+        f'<html xmlns="{XHTML_NS}"><head><title>漢字</title></head><body></body></html>'
+    )
+    tasks_head, _ = traverser.traverse(doc_head)
+    assert len(tasks_head) == 0
+
+    # 3. Test script subtree
+    doc_script = MagicMock()
+    doc_script.root = etree.fromstring(
+        f'<html xmlns="{XHTML_NS}"><body><script>var x = "漢字";</script></body></html>'
+    )
+    tasks_script, _ = traverser.traverse(doc_script)
+    assert len(tasks_script) == 0
