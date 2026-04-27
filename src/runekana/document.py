@@ -104,7 +104,7 @@ class XhtmlDocument:
         self._normalize_empty_tags(self.tree)
 
         # Serialize ONLY the root to avoid lxml re-inserting DOCTYPE from the tree object.
-        # NOTE: This ignores any trailing content (comments, whitespace) after the root 
+        # NOTE: This ignores any trailing content (comments, whitespace) after the root
         # element in the original file, which is usually acceptable for EPUB documents.
         body_bytes = etree.tostring(
             self.tree.getroot(),

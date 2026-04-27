@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  set-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - id: set-matrix
+        name: Generate Matrix
+        run: |
+          # Extract common check names from x86_64-linux
+          CHECKS=$(nix eval --json .#checks.x86_64-linux --apply builtins.attrNames)
+          echo "matrix=$CHECKS" >> "$GITHUB_OUTPUT"
+
+  run-check:
+    needs: set-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        # Cross product of checks and specific system configurations
+        system: [ x86_64-linux, aarch64-linux, x86_64-darwin, aarch64-darwin ]
+        check: ${{ fromJson(needs.set-matrix.outputs.matrix) }}
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: x86_64-darwin
+            runner: macos-13
+          - system: aarch64-darwin
+            runner: macos-latest
+        # Exclude static analysis on non-Linux platforms to save resources
+        exclude:
+          - system: aarch64-linux
+            check: ruff
+          - system: x86_64-darwin
+            check: ruff
+          - system: aarch64-darwin
+            check: ruff
+          - system: aarch64-linux
+            check: pyright
+          - system: x86_64-darwin
+            check: pyright
+          - system: aarch64-darwin
+            check: pyright
+
+    runs-on: ${{ matrix.runner }}
+    name: "${{ matrix.check }} (${{ matrix.system }})"
+
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: Run check
+        run: nix build -L .#checks.${{ matrix.system }}.${{ matrix.check }}

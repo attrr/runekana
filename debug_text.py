@@ -2,11 +2,10 @@
 import sys
 import logging
 import sqlite3
-import rich
 from rich import box
 from rich.console import Console
 from rich.table import Table
-from src.runekana.tokenizer import Tokenizer, YomitanDB
+from src.runekana.tokenizer import YomitanDB
 from src.runekana.text import split_okurigana, has_kanji
 from sudachipy import Dictionary, SplitMode
 
@@ -19,7 +18,6 @@ def debug_text(text: str):
     # 1. Initialize core components
     db = YomitanDB()
     # We use a dummy skip set to show ranks even for frequent words
-    tokenizer_obj = Tokenizer(skip_words=set(), local_dict={})
 
     sudachi_dict = Dictionary(dict="full")
     sudachi_tokenizer = sudachi_dict.create()

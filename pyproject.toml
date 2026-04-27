@@ -18,8 +18,21 @@ dependencies = [
 [project.scripts]
 runekana = "runekana.main:cli"
 
+[dependency-groups]
+dev = [
+    "coverage>=7.13.5",
+    "pytest>=9.0.0",
+]
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
 
+[tool.pyright]
+include = ["src", "tests", "debug_text.py"]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"

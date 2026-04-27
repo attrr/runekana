@@ -15,6 +15,10 @@
 # Whitelist the entire src directory tree
 !src/
 !src/**
+!tests/
+!tests/**
+!.github/
+!.github/**
 
 # Explicitly re-ignore common artifacts and caches 
 # that might be generated inside whitelisted directories

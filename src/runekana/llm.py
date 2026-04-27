@@ -177,14 +177,15 @@ class LLM(ABC):
             log.warning(f"Failed to serialize prediction: {e}")
             return []
 
-    def infer(self, l: list[Candidate]) -> list[Hint]:
+    def infer(self, candidates: list[Candidate]) -> list[Hint]:
         """Infer readings for candidates through the complete pipeline."""
-        if not l:
+        if not candidates:
             return []
 
         # build prompt
         words = "\n".join(
-            f"{c.id}. {c.word} → {c.reading}  (文脈: ...{c.context}...)" for c in l
+            f"{c.id}. {c.word} → {c.reading}  (文脈: ...{c.context}...)"
+            for c in candidates
         )
         prompt = self.prompt + words
 
