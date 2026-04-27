@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Any, Callable
 from dataclasses import dataclass, field
 
+import httpx
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 from google import genai
@@ -31,6 +32,58 @@ from runekana import console
 from runekana.text import has_kanji, split_okurigana
 
 log = logging.getLogger("runekana.llm")
+
+
+class Connectivity:
+    DEFAULT_URL: str = "http://connectivitycheck.gstatic.com/generate_204"
+
+    def __init__(self, canary_url: str | None = None) -> None:
+        if canary_url:
+            self.canary_url = canary_url
+        else:
+            self.canary_url = self.DEFAULT_URL
+        self.is_online = asyncio.Event()
+        self.is_online.set()
+        self._recovery_task: asyncio.Task | None = None
+
+    async def wait_until_online(self):
+        await self.is_online.wait()
+
+    def disconnect_occurs(self):
+        # query gen204 first before decide
+        try:
+            resp = httpx.get(self.canary_url)
+            if resp.status_code == 204:
+                return
+        except Exception:
+            pass
+
+        if self.is_online.is_set():
+            self.is_online.clear()
+            log.warning("Internet connection lost.")
+
+        if self._recovery_task is None or self._recovery_task.done():
+            self._recovery_task = asyncio.create_task(self.probe_until_online())
+
+    async def probe_until_online(self):
+        log.info("Starting background connectivity check...")
+        try:
+            async for attempt in AsyncRetrying(
+                wait=wait_exponential(multiplier=2, min=5, max=60),
+                retry=retry_if_exception(lambda e: True),
+                before_sleep=before_sleep_log(log, logging.DEBUG),
+            ):
+                with attempt:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        resp = await client.get(self.canary_url)
+                        if resp.status_code == 204:
+                            log.info("Internet connection restored.")
+                            self.is_online.set()
+                            return
+                        raise RuntimeError(f"Unexpected status: {resp.status_code}")
+        except Exception as e:
+            log.error("Fatal error during connectivity check: %s", e)
+            self.is_online.set()  # temp set online to avoid deadlock
 
 
 class Candidate(BaseModel):
@@ -61,7 +114,11 @@ class Hints(BaseModel):
 class LLM(ABC):
     """Interface for handling LLM communication and usage tracking."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        canary_url: str = Connectivity.DEFAULT_URL,
+    ) -> None:
         """Initialize the LLM client and session state."""
         prompt = """\
             あなたは日本語言語学の専門家です。以下は日本語の小説から抽出した漢字語とその仮説読みです。
@@ -84,6 +141,7 @@ class LLM(ABC):
         self.output_tokens: int = 0
         self.provider = self.__class__.__name__.upper()
         self.model_name = model_name
+        self.monitor = Connectivity(canary_url)
 
     def increase_counter(self, input_tokens: int, output_tokens: int):
         """Record token consumption for the current session."""
@@ -132,22 +190,25 @@ class LLM(ABC):
             if status == 429 or status >= 500:
                 return True
 
-        return any(
-            cls.__name__
-            in {
-                "RemoteProtocolError",
-                "ConnectError",
-                "ReadTimeout",
-                "WriteTimeout",
-                "PoolTimeout",
-                "ConnectTimeout",
-                "TimeoutException",
-                "NetworkError",
-                "ReadError",
-                "WriteError",
-            }
-            for cls in type(e).__mro__
-        )
+        # Check for common network error names across providers/libraries
+        network_errors = {
+            "RemoteProtocolError",
+            "ConnectError",
+            "ReadTimeout",
+            "WriteTimeout",
+            "PoolTimeout",
+            "ConnectTimeout",
+            "TimeoutException",
+            "NetworkError",
+            "ReadError",
+            "WriteError",
+            "ServerDisconnectedError",
+            "ClientOSError",
+            "ClientPayloadError",
+            "ClientConnectorError",
+        }
+
+        return any(cls.__name__ in network_errors for cls in type(e).__mro__)
 
     async def predict_with_retry(
         self, prompt: str, sleep_min: float = 0.5, sleep_max: float = 2.5
@@ -158,13 +219,20 @@ class LLM(ABC):
         async for attempt in AsyncRetrying(
             wait=wait_exponential(multiplier=1.5, min=2, max=120)
             + wait_random(min=0, max=3),
-            stop=stop_after_attempt(8),
+            stop=stop_after_attempt(12),
             retry=retry_if_exception(self.is_retryable),
             before_sleep=before_sleep_log(log, logging.WARNING, exc_info=True),
             reraise=True,
         ):
             with attempt:
-                return await self.predict(prompt)
+                await self.monitor.wait_until_online()
+
+                try:
+                    return await self.predict(prompt)
+                except Exception as e:
+                    if self.is_retryable(e):
+                        self.monitor.disconnect_occurs()
+                    raise
         return ""
 
     def serialize_predict(self, s: str) -> list[Hint]:
@@ -200,8 +268,9 @@ class Vertex(LLM):
         project: str,
         location: str = "global",
         model_name: str = "gemini-3.1-flash-lite-preview",
+        canary_url: str = Connectivity.DEFAULT_URL,
     ) -> None:
-        super().__init__(model_name=model_name)
+        super().__init__(model_name=model_name, canary_url=canary_url)
         self.client = genai.Client(vertexai=True, project=project, location=location)
 
     async def predict(self, prompt: str) -> str:
@@ -239,9 +308,12 @@ class Gemini(Vertex):
     """Google AI Studio (Gemini) provider implementation via unified genai SDK."""
 
     def __init__(
-        self, api_key: str, model_name: str = "gemini-3.1-flash-lite-preview"
+        self,
+        api_key: str,
+        model_name: str = "gemini-3.1-flash-lite-preview",
+        canary_url: str = Connectivity.DEFAULT_URL,
     ) -> None:
-        LLM.__init__(self, model_name)
+        LLM.__init__(self, model_name, canary_url=canary_url)
         self.client = genai.Client(api_key=api_key)
         self.model_name = model_name
 
@@ -250,9 +322,13 @@ class OpenAI(LLM):
     """OpenAI-compatible provider implementation using AsyncOpenAI."""
 
     def __init__(
-        self, api_key: str, base_url: str | None = None, model_name: str = "gpt-4o-mini"
+        self,
+        api_key: str,
+        base_url: str | None = None,
+        model_name: str = "gpt-4o-mini",
+        canary_url: str = Connectivity.DEFAULT_URL,
     ) -> None:
-        super().__init__(model_name=model_name)
+        super().__init__(model_name=model_name, canary_url=canary_url)
         self.client = AsyncOpenAI(
             api_key=api_key, base_url=base_url, max_retries=0, timeout=120.0
         )
@@ -403,13 +479,15 @@ class Verifier:
         """Execute a single verification batch with concurrency control."""
         async with self.semaphore:
             cands = [job.to_candidate(i) for i, job in enumerate(batch)]
+            failed = False
             try:
                 hints = await self.llm.infer(cands)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                log.error("Batch %d failed: %s", batch_index, e)
+                log.error("Batch %d FAILED after retries: %s", batch_index, e)
                 hints = []
+                failed = True
 
             self.completed_batches += 1
             if self.current_task_id is not None:
@@ -420,7 +498,8 @@ class Verifier:
                 )
 
             log.info("-" * 60)
-            log.info(">> [ BATCH %d / %d COMPLETED ] <<", batch_index, total_batches)
+            status = "FAILED" if failed else "COMPLETED"
+            log.info(">> [ BATCH %d / %d %s ] <<", batch_index, total_batches, status)
 
             batch_corrections = 0
             for hint in hints:

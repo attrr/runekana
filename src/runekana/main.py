@@ -29,14 +29,18 @@ log = logging.getLogger("runekana")
 
 def _build_llm(args) -> LLM:
     """Construct the appropriate LLM client from CLI arguments and env vars."""
+    kwargs = {"model_name": args.model}
+    if args.canary_url:
+        kwargs["canary_url"] = args.canary_url
+
     if args.provider == "gemini":
         api_key = os.environ.get("GEMINI_API_KEY")
         gcp_project = os.environ.get("GCP_PROJECT")
         if api_key:
-            return Gemini(api_key=api_key, model_name=args.model)
+            return Gemini(api_key=api_key, **kwargs)
         elif gcp_project:
             location = os.environ.get("GCP_LOCATION", "global")
-            return Vertex(project=gcp_project, location=location, model_name=args.model)
+            return Vertex(project=gcp_project, location=location, **kwargs)
         else:
             log.error(
                 "Either GEMINI_API_KEY or GCP_PROJECT env var is required for gemini provider"
@@ -46,9 +50,7 @@ def _build_llm(args) -> LLM:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             log.warning("OPENAI_API_KEY not set. Assuming proxy/setup handles auth.")
-        return OpenAI(
-            api_key=api_key or "", base_url=args.base_url, model_name=args.model
-        )
+        return OpenAI(api_key=api_key or "", base_url=args.base_url, **kwargs)
 
 
 def setup_logging(verbosity: int):
@@ -167,6 +169,11 @@ def cli():
         "--base-url",
         default=None,
         help="Custom base URL for OpenAI-compatible providers (e.g. DeepSeek, vLLM).",
+    )
+    p.add_argument(
+        "--canary-url",
+        default="http://connectivitycheck.gstatic.com/generate_204",
+        help="URL to check for internet connectivity (default: Google 204). Try Cloudflare or GrapheneOS one if blocked.",
     )
     p.add_argument(
         "--concurrency",
