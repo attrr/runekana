@@ -177,6 +177,7 @@ class EpubArchive:
         batch_size: int = 100,
         price_input: float = 0.0,
         price_output: float = 0.0,
+        generated_dir: Optional[str] = None,
     ) -> int:
         """
         Orchestrate the annotation pipeline: Scan, Verify, and Inject.
@@ -227,6 +228,8 @@ class EpubArchive:
                 batch_size=batch_size,
                 price_input=price_input,
                 price_output=price_output,
+                generated_dir=generated_dir,
+                book_name=os.path.splitext(os.path.basename(self.input_path))[0],
             )
             with verifier:
                 corrections = verifier.verify(all_jobs)

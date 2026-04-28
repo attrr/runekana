@@ -112,6 +112,7 @@ def main(args):
                 batch_size=args.batch_size,
                 price_input=args.price_input,
                 price_output=args.price_output,
+                generated_dir=args.generated_dir,
             )
     except KeyboardInterrupt:
         log.warning(
@@ -186,6 +187,11 @@ def cli():
         type=int,
         default=100,
         help="Number of words to send in a single LLM request (default: 100). Lower for faster feedback.",
+    )
+    p.add_argument(
+        "--generated-dir",
+        default=None,
+        help="Directory to save LLM outputs as JSON.",
     )
     p.add_argument(
         "--price-input",

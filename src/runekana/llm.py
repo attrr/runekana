@@ -5,11 +5,15 @@ Exposes Verifier class for parallel batch verification.
 Supports Gemini (Vertex AI) and OpenAI-compatible providers.
 """
 
+from pathlib import Path
+import re
+import json
+import gzip
 import asyncio
 import textwrap
 import logging
 import random
-import re
+from datetime import datetime
 from abc import ABC, abstractmethod
 from typing import Optional, Any, Callable
 from dataclasses import dataclass, field
@@ -342,6 +346,7 @@ class Gemini(Vertex):
         self.client = genai.Client(
             vertexai=False, api_key=api_key, http_options=http_options
         )
+        self.base_url = base_url
         self.model_name = model_name
 
     async def aclose(self):
@@ -364,6 +369,7 @@ class OpenAI(LLM):
         self.client = AsyncOpenAI(
             api_key=api_key, base_url=base_url, max_retries=0, timeout=120.0
         )
+        self.base_url = base_url
 
     async def aclose(self):
         """Close the AsyncOpenAI client."""
@@ -467,6 +473,8 @@ class Verifier:
         batch_size: int = 100,
         price_input: float = 0.0,
         price_output: float = 0.0,
+        generated_dir: Optional[str] = None,
+        book_name: Optional[str] = None,
     ):
         self.llm = llm
         self.local_dict = local_dict
@@ -476,6 +484,8 @@ class Verifier:
         self.batch_size = batch_size
         self.price_input = price_input
         self.price_output = price_output
+        self.generated_dir = generated_dir
+        self.book_name = book_name
         self.semaphore = asyncio.Semaphore(concurrency)
         self.corrections = 0
         self.completed_batches = 0
@@ -506,6 +516,57 @@ class Verifier:
             console.print(
                 f"[bold green]Verification complete.[/bold green] Applied {self.corrections} corrections."
             )
+
+    def _save_llm_output(
+        self,
+        batch: list[VerificationJob],
+        hints: list[Hint],
+        batch_index: int,
+        batch_corrections: int,
+    ):
+        """Save a successfully verified batch to the generated-dir for tracing/collection."""
+        if not self.generated_dir or not self.book_name:
+            return
+
+        # Ensure directory exists: {generated_dir}/{book_name}/
+        target_dir = Path(self.generated_dir, self.book_name)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = target_dir.joinpath(f"{timestamp}-batch-{batch_index:03d}.json.gz")
+        try:
+            base_url = getattr(self.llm, "base_url", None)
+            data = []
+            hint_map = {h.id: h for h in hints}
+            for i, job in enumerate(batch):
+                hint = hint_map.get(i)
+                if hint:
+                    data.append(
+                        {
+                            "candidate": job.to_candidate(i).model_dump(),
+                            "hint": hint.model_dump(),
+                        }
+                    )
+
+            payload = {
+                "meta": {
+                    "book": self.book_name,
+                    "model": self.llm.model_name,
+                    "base_url": base_url,
+                    "timestamp": timestamp,
+                    "batch_index": batch_index,
+                    "is_official": base_url is None,
+                    "corrections": batch_corrections,
+                },
+                "data": data,
+            }
+
+            with gzip.open(path, "wt", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+
+            log.info("Saved batch %d to trace: %s", batch_index, path)
+        except Exception as e:
+            log.warning("Failed to save trace batch %d: %s", batch_index, e)
 
     async def _run_batch(
         self,
@@ -547,8 +608,12 @@ class Verifier:
                 else:
                     log.warning("LLM returned invalid ID %d", hint.id)
 
-            if batch_corrections > 0 and self.dict_path and self.save_fn:
-                self.save_fn(self.dict_path, self.local_dict)
+            if batch_corrections > 0:
+                if self.dict_path and self.save_fn:
+                    self.save_fn(self.dict_path, self.local_dict)
+
+            if not failed and hints:
+                self._save_llm_output(batch, hints, batch_index, batch_corrections)
 
             return batch_corrections
 
