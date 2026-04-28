@@ -25,6 +25,15 @@ Or via Nix:
 nix profile install .
 ```
 
+Or run via container:
+```bash
+podman run -it --rm \
+  -v $(pwd):/data:Z \
+  --env GEMINI_API_KEY \
+  ghcr.io/attrr/runekana:latest \
+  /data/input.epub /data/output.epub --verify
+```
+
 ## Setup
 
 Before first use, import a Yomitan frequency dictionary to enable frequency-based filtering:
@@ -36,6 +45,50 @@ runekana --freq-dict <path-to-yomitan-dict.zip>
 This extracts the dataset into a local SQLite cache (`XDG_STATE_HOME`). This operation only needs to be performed once.
 
 ## Usage
+<details>
+<summary>runekana --help</summary>
+
+```text
+usage: runekana [-h] [--skip-top SKIP_TOP] [--freq-dict FREQ_DICT] [--dict DICT] [--verify] [--contextual]
+                [--provider {gemini,openai}] [--model MODEL] [--base-url BASE_URL] [--canary-url CANARY_URL]
+                [--concurrency CONCURRENCY] [--batch-size BATCH_SIZE] [--generated-dir GENERATED_DIR]
+                [--price-input PRICE_INPUT] [--price-output PRICE_OUTPUT] [--verbose]
+                input output
+
+Add furigana annotations to Japanese EPUB files.
+
+positional arguments:
+  input                 Input EPUB file
+  output                Output EPUB file
+
+options:
+  -h, --help            show this help message and exit
+  --skip-top SKIP_TOP   Skip the top N most frequent Japanese words (default: 1500).
+  --freq-dict FREQ_DICT
+                        Path to Yomitan frequency dictionary (ZIP or folder) to import into local cache.
+  --dict DICT           Local dictionary file (TSV: word<TAB>reading).
+  --verify              Verify readings with LLM (needs GCP_PROJECT for gemini, or OPENAI_API_KEY for openai).
+  --contextual          Deduplicate candidates by context (sends identical words in different contexts to LLM).
+  --provider {gemini,openai}
+                        API provider for verification (default: gemini).
+  --model MODEL         LLM model name to use for verification.
+  --base-url BASE_URL   Custom base URL for OpenAI/Gemini-compatible providers (e.g. DeepSeek, vLLM).
+  --canary-url CANARY_URL
+                        URL to check for internet connectivity (default: Google 204). Try Cloudflare or GrapheneOS one if
+                        blocked.
+  --concurrency CONCURRENCY
+                        Max parallel LLM requests during verification (default: 5). Lower for rate-limited APIs.
+  --batch-size BATCH_SIZE
+                        Number of words to send in a single LLM request (default: 100). Lower for faster feedback.
+  --generated-dir GENERATED_DIR
+                        Directory to save LLM outputs as JSON.
+  --price-input PRICE_INPUT
+                        Price per 1M input tokens (USD). Used for cost estimation.
+  --price-output PRICE_OUTPUT
+                        Price per 1M output tokens (USD). Used for cost estimation.
+  --verbose, -v         Increase verbosity (-v, -vvv)
+```
+</details>
 
 Basic annotation:
 
