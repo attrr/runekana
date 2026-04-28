@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Any, Callable
 from dataclasses import dataclass, field
 
+from google.genai.types import HttpOptions
 import httpx
 from pydantic import BaseModel
 from openai import AsyncOpenAI
@@ -174,6 +175,18 @@ class LLM(ABC):
         report += "========================="
         return report
 
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.aclose()
+
+    async def aclose(self):
+        """Release asynchronous resources. Override in subclasses."""
+        pass
+
     @abstractmethod
     async def predict(self, prompt: str) -> str:
         """Execute a raw LLM request with retry and error handling."""
@@ -307,15 +320,34 @@ class Vertex(LLM):
 class Gemini(Vertex):
     """Google AI Studio (Gemini) provider implementation via unified genai SDK."""
 
+    @staticmethod
+    async def _log_http_request(req: httpx.Request):
+        log.info(f"request_sent: {req.method} {req.url}")
+
     def __init__(
         self,
         api_key: str,
+        base_url: Optional[str] = None,
         model_name: str = "gemini-3.1-flash-lite-preview",
         canary_url: str = Connectivity.DEFAULT_URL,
     ) -> None:
         LLM.__init__(self, model_name, canary_url=canary_url)
-        self.client = genai.Client(api_key=api_key)
+        self._httpx_async_client = httpx.AsyncClient(
+            event_hooks={"request": [self._log_http_request]}
+        )
+        http_options = HttpOptions(
+            base_url=base_url,
+            httpx_async_client=self._httpx_async_client,
+        )
+        self.client = genai.Client(
+            vertexai=False, api_key=api_key, http_options=http_options
+        )
         self.model_name = model_name
+
+    async def aclose(self):
+        """Close the internal httpx client."""
+        if hasattr(self, "_httpx_async_client"):
+            await self._httpx_async_client.aclose()
 
 
 class OpenAI(LLM):
@@ -332,6 +364,11 @@ class OpenAI(LLM):
         self.client = AsyncOpenAI(
             api_key=api_key, base_url=base_url, max_retries=0, timeout=120.0
         )
+
+    async def aclose(self):
+        """Close the AsyncOpenAI client."""
+        if hasattr(self, "client"):
+            await self.client.close()
 
     async def predict(self, prompt: str) -> str:
         """Execute async prediction using OpenAI-compatible API."""
@@ -517,24 +554,26 @@ class Verifier:
 
     async def _verify_async(self, jobs: list[VerificationJob]) -> int:
         """Internal async orchestrator for all jobs."""
-        batches = [
-            jobs[i : i + self.batch_size] for i in range(0, len(jobs), self.batch_size)
-        ]
-        total_batches = len(batches)
+        async with self.llm:
+            batches = [
+                jobs[i : i + self.batch_size]
+                for i in range(0, len(jobs), self.batch_size)
+            ]
+            total_batches = len(batches)
 
-        self.current_task_id = self.progress.add_task(
-            f"Verifying batches ({self.completed_batches}/{total_batches})...",
-            total=total_batches,
-        )
+            self.current_task_id = self.progress.add_task(
+                f"Verifying batches ({self.completed_batches}/{total_batches})...",
+                total=total_batches,
+            )
 
-        tasks = [
-            self._run_batch(batch, i + 1, total_batches)
-            for i, batch in enumerate(batches)
-        ]
+            tasks = [
+                self._run_batch(batch, i + 1, total_batches)
+                for i, batch in enumerate(batches)
+            ]
 
-        results = await asyncio.gather(*tasks)
-        self.corrections = sum(results)
-        return self.corrections
+            results = await asyncio.gather(*tasks)
+            self.corrections = sum(results)
+            return self.corrections
 
     def verify(self, jobs: list[VerificationJob]) -> int:
         """

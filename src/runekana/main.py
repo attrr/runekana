@@ -37,7 +37,7 @@ def _build_llm(args) -> LLM:
         api_key = os.environ.get("GEMINI_API_KEY")
         gcp_project = os.environ.get("GCP_PROJECT")
         if api_key:
-            return Gemini(api_key=api_key, **kwargs)
+            return Gemini(api_key=api_key, base_url=args.base_url, **kwargs)
         elif gcp_project:
             location = os.environ.get("GCP_LOCATION", "global")
             return Vertex(project=gcp_project, location=location, **kwargs)
@@ -168,7 +168,7 @@ def cli():
     p.add_argument(
         "--base-url",
         default=None,
-        help="Custom base URL for OpenAI-compatible providers (e.g. DeepSeek, vLLM).",
+        help="Custom base URL for OpenAI/Gemini-compatible providers (e.g. DeepSeek, vLLM).",
     )
     p.add_argument(
         "--canary-url",
