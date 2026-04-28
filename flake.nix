@@ -23,6 +23,23 @@
         in
         {
           default = pkgs.callPackage ./default.nix { };
+          dockerImage = pkgs.dockerTools.buildLayeredImage {
+            name = "runekana";
+            tag = "latest";
+            contents = [
+              self.packages.${system}.default
+              pkgs.busybox
+              pkgs.cacert
+            ];
+            config = {
+              Entrypoint = [ "/bin/runekana" ];
+              Env = [
+                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "PATH=/usr/bin:/bin:${self.packages.${system}.default}/bin"
+                "HOME=/tmp"
+              ];
+            };
+          };
         }
       );
 
