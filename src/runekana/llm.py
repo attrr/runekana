@@ -13,6 +13,7 @@ import asyncio
 import textwrap
 import logging
 import random
+import hashlib
 from datetime import datetime
 from abc import ABC, abstractmethod
 from typing import Optional, Any, Callable
@@ -260,10 +261,10 @@ class LLM(ABC):
             log.warning(f"Failed to serialize prediction: {e}")
             return []
 
-    async def infer(self, candidates: list[Candidate]) -> list[Hint]:
+    async def infer(self, candidates: list[Candidate]) -> tuple[list[Hint], str, str]:
         """Infer readings for candidates through the complete pipeline."""
         if not candidates:
-            return []
+            return [], "", ""
 
         # build prompt
         words = "\n".join(
@@ -274,7 +275,7 @@ class LLM(ABC):
 
         response = await self.predict_with_retry(prompt)
         log.debug("Raw response:\n%s", response[:500] if response else "(empty)")
-        return self.serialize_predict(response)
+        return self.serialize_predict(response), prompt, response
 
 
 class Vertex(LLM):
@@ -427,8 +428,10 @@ class VerificationJob:
             id=id, word=self.word, reading=self.proposed_reading, context=self.context
         )
 
-    def apply_hint(self, hint: Hint, local_dict: dict[str, str]) -> bool:
-        """Apply LLM correction back to local dict and DOM tokens. Returns True if applied."""
+    def apply_hint(
+        self, hint: Hint, local_dict: dict[str, str]
+    ) -> tuple[bool, Optional[str]]:
+        """Apply LLM correction. Returns (applied, optional_reason)."""
         if not hint.is_correct and hint.correction and hint.correction != hint.proposed:
             # Validate okurigana sync to prevent LLM hallucination (e.g., 仰い: おっしゃい -> あおぎ)
             if has_kanji(hint.word):
@@ -442,7 +445,7 @@ class VerificationJob:
                             hint.proposed,
                             hint.correction,
                         )
-                        return False
+                        return False, "okurigana mismatch"
 
             log.info(
                 "  Correction: %s (%s -> %s)",
@@ -456,8 +459,8 @@ class VerificationJob:
             local_dict[hint.word] = hint.correction
             for token in self.token_refs:
                 token.reading = hint.correction
-            return True
-        return False
+            return True, None
+        return False, None
 
 
 class Verifier:
@@ -488,6 +491,7 @@ class Verifier:
         self.book_name = book_name
         self.semaphore = asyncio.Semaphore(concurrency)
         self.corrections = 0
+        self.run_id = int(datetime.now().timestamp())
         self.completed_batches = 0
 
         # Persistent progress bar, manually started during verification
@@ -523,17 +527,21 @@ class Verifier:
         hints: list[Hint],
         batch_index: int,
         batch_corrections: int,
+        rejections: dict[int, str],
+        raw_prompt: str,
+        raw_response: str,
     ):
         """Save a successfully verified batch to the generated-dir for tracing/collection."""
         if not self.generated_dir or not self.book_name:
             return
 
-        # Ensure directory exists: {generated_dir}/{book_name}/
-        target_dir = Path(self.generated_dir, self.book_name)
+        # Ensure directory exists: {generated_dir}/{book_name}/{model_name}
+        model_name = self.llm.model_name
+        target_dir = Path(self.generated_dir, self.book_name, model_name)
         target_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = target_dir.joinpath(f"{timestamp}-batch-{batch_index:03d}.json.gz")
+        path = target_dir.joinpath(f"{self.run_id}-batch-{batch_index:03d}.json.gz")
         try:
             base_url = getattr(self.llm, "base_url", None)
             data = []
@@ -541,22 +549,31 @@ class Verifier:
             for i, job in enumerate(batch):
                 hint = hint_map.get(i)
                 if hint:
-                    data.append(
-                        {
-                            "candidate": job.to_candidate(i).model_dump(),
-                            "hint": hint.model_dump(),
-                        }
-                    )
+                    ele = {
+                        "candidate": job.to_candidate(i).model_dump(),
+                        "hint": hint.model_dump(),
+                        "rejected": False,
+                    }
+                    if i in rejections:
+                        ele["rejected"] = True
+                        ele["rejected_reason"] = rejections[i]
+                    data.append(ele)
 
             payload = {
                 "meta": {
                     "book": self.book_name,
-                    "model": self.llm.model_name,
+                    "model": model_name,
                     "base_url": base_url,
+                    "run_id": self.run_id,
                     "timestamp": timestamp,
                     "batch_index": batch_index,
                     "is_official": base_url is None,
                     "corrections": batch_corrections,
+                    "prompt_hash": hashlib.sha256(self.llm.prompt.encode()).hexdigest(),
+                },
+                "raw_data": {
+                    "prompt": raw_prompt,
+                    "response": raw_response,
                 },
                 "data": data,
             }
@@ -579,7 +596,7 @@ class Verifier:
             cands = [job.to_candidate(i) for i, job in enumerate(batch)]
             failed = False
             try:
-                hints = await self.llm.infer(cands)
+                hints, raw_prompt, raw_resp = await self.llm.infer(cands)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -600,11 +617,16 @@ class Verifier:
             log.info(">> [ BATCH %d / %d %s ] <<", batch_index, total_batches, status)
 
             batch_corrections = 0
+            rejections = {}
             for hint in hints:
                 if 0 <= hint.id < len(batch):
                     job = batch[hint.id]
-                    if job.word == hint.word and job.apply_hint(hint, self.local_dict):
-                        batch_corrections += 1
+                    if job.word == hint.word:
+                        applied, reason = job.apply_hint(hint, self.local_dict)
+                        if applied:
+                            batch_corrections += 1
+                        elif reason:
+                            rejections[hint.id] = reason
                 else:
                     log.warning("LLM returned invalid ID %d", hint.id)
 
@@ -613,7 +635,15 @@ class Verifier:
                     self.save_fn(self.dict_path, self.local_dict)
 
             if not failed and hints:
-                self._save_llm_output(batch, hints, batch_index, batch_corrections)
+                self._save_llm_output(
+                    batch,
+                    hints,
+                    batch_index,
+                    batch_corrections,
+                    rejections,
+                    raw_prompt,
+                    raw_resp,
+                )
 
             return batch_corrections
 
