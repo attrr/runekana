@@ -1,10 +1,10 @@
 from __future__ import annotations
 import csv
+from dataclasses import dataclass
 import logging
 from typing import Optional
 
 import jaconv
-from pydantic import BaseModel
 import os
 import json
 import zipfile
@@ -13,6 +13,7 @@ import sqlite3
 import re
 
 from sudachipy import Dictionary, SplitMode
+import sudachipy
 from runekana.text import has_kanji, is_kanji
 
 log = logging.getLogger("runekana.text")
@@ -177,10 +178,37 @@ def save_local_dict(path: str, local_dict: dict[str, str]):
         log.warning("Could not save local dict %s: %s", path, e)
 
 
-class Token(BaseModel):
-    surface: str
-    reading: Optional[str] = None
-    to_verify: bool = False
+@dataclass
+class Token:
+    def __init__(
+        self,
+        morpheme: sudachipy.Morpheme,
+        to_verify: bool = False,
+        reading: Optional[str] = None,
+    ) -> None:
+        self.morpheme = morpheme
+        self.to_verify = to_verify
+
+        if reading is not None:
+            reading = jaconv.kata2hira(reading)
+        self.reading = reading
+
+    def __repr__(self) -> str:
+        return f"TextNode({self.surface=}, {self.reading=}, {self.to_verify=}, {self.begin=})".replace(
+            "self.", ""
+        )
+
+    @property
+    def surface(self) -> str:
+        return self.morpheme.surface()
+
+    @property
+    def begin(self) -> int:
+        return self.morpheme.begin()
+
+    @property
+    def end(self) -> int:
+        return self.morpheme.end()
 
 
 class Tokenizer:
@@ -220,7 +248,7 @@ class Tokenizer:
             to_verify = False
 
             if not has_kanji(surface):
-                results.append(Token(surface=surface, reading=None, to_verify=False))
+                results.append(Token(morpheme=m, to_verify=False))
                 continue
 
             prev_is_kanji = i > 0 and is_kanji(tokens[i - 1].surface())
@@ -241,5 +269,5 @@ class Tokenizer:
             else:
                 reading = jaconv.kata2hira(m.reading_form())
                 to_verify = self.is_ambiguous(surface)
-            results.append(Token(surface=surface, reading=reading, to_verify=to_verify))
+            results.append(Token(morpheme=m, reading=reading, to_verify=to_verify))
         return results

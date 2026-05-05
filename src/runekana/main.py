@@ -15,7 +15,7 @@ import sys
 from rich.logging import RichHandler
 
 from runekana import console
-from runekana.document import EpubArchive
+from runekana.process import EpubArchive
 from runekana.llm import Gemini, Vertex, OpenAI, LLM
 from runekana.tokenizer import (
     load_local_dict,
