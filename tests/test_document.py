@@ -8,13 +8,14 @@ def normalize_html(html_str):
     parser = etree.XMLParser(remove_blank_text=False)
     # Wrap in a root if not present to allow multiple tags
     wrapped = f"<root>{html_str}</root>"
-    tree = etree.fromstring(wrapped, parser)
+    element = etree.fromstring(wrapped, parser)
+    tree = etree.ElementTree(element)
 
     # Call the static method directly
     XhtmlDocument._normalize_empty_tags(tree)
 
     # Return inner HTML
-    res = etree.tostring(tree, encoding="unicode", method="xml")
+    res = etree.tostring(element, encoding="unicode", method="xml")
     # Clean up the root wrapper
     return res.replace("<root>", "").replace("</root>", "")
 
