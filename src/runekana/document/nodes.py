@@ -428,9 +428,12 @@ class TextNode:
             is_last = t is last
 
             if is_first and is_last:
-                # TODO: single token spans both boundaries; needs two-sided trim
                 surface = t.surface[ctx.start_idx - t.begin : ctx.end_idx - t.begin]
-                reading = first_reading  # approximation: ltr-trimmed reading
+                if t.reading and first_reading is not None and last_reading is not None:
+                    diff = len(last_reading) - len(normalize_kana(t.reading))
+                    reading = first_reading[:diff] if diff < 0 else first_reading
+                else:
+                    reading = None
             elif is_first:
                 surface = t.surface[ctx.start_idx - t.begin :]
                 reading = first_reading
