@@ -4,10 +4,11 @@ from bisect import bisect_right
 from typing import Literal, Optional, Self, TYPE_CHECKING
 
 
+import jaconv
 from lxml import etree
 
 from runekana.tokenizer import Token, Tokenizer
-from runekana.text import chunk_by_kanji, is_kana, normalize_kana
+from runekana.text import chunk_by_kanji, has_small_kana, is_kana, normalize_kana
 
 from .utils import get_tag_from_element, generate_offsets, find_overlap_range
 from .tokens import Yomi, TokenizedText
@@ -184,6 +185,111 @@ class TextNode:
 
         return reading
 
+    def _lookup_anno_match_reading(
+        self,
+        reading: str,
+        word: str,
+        annotations: dict[str, str],
+        direction: Literal["ltr", "rtl"] = "ltr",
+    ) -> Optional[str]:
+        """
+        Look up a word's reading in annotations and match it against the reading prefix/suffix.
+
+        This method handles small kana normalization (e.g., matching 'きや' in annotations
+        with 'きゃ' in the token reading).
+
+        Args:
+            reading: The token reading string to match against.
+            word: The kanji word to look up in annotations.
+            annotations: Dictionary of existing word-to-reading mappings.
+            direction: 'ltr' to match from start, 'rtl' to match from end.
+
+        Returns:
+            The matched substring from the input `reading` (possibly containing small kana),
+            or None if the word is not found in annotations.
+
+        Raises:
+            ImpossibleToAlignException: If the annotation exists but the readings are
+                incompatible even after small kana normalization.
+        """
+        r = annotations.get(word)
+        if not r:
+            return None
+
+        is_match = reading.startswith(r) if direction == "ltr" else reading.endswith(r)
+        if is_match:
+            return r
+
+        # in annotations not has common prefix/suffix with reading
+        # most like exist ruby normalized small kana
+        exist_r = reading[: len(r)] if direction == "ltr" else reading[-len(r) :]
+        if has_small_kana(exist_r):
+            normalized = jaconv.enlargesmallkana(exist_r)
+            if normalized == r:
+                return exist_r
+            raise ImpossibleToAlignException(
+                f"normalized reading {normalized!r} (from {exist_r!r}) still does not match annotation {r!r} for word {word!r}"
+            )
+        else:
+            raise ImpossibleToAlignException(
+                f"reading {direction} part {exist_r!r} does not match annotation {r!r} for word {word!r}"
+            )
+
+    def _trim_reading_by_lookup_anno(
+        self,
+        reading: str,
+        word: str,
+        annotations: Optional[dict[str, str]] = None,
+        direction: Literal["ltr", "rtl"] = "ltr",
+    ) -> str:
+        """
+        Trim a reading string by removing parts that match existing annotations for a kanji word.
+
+        If a match for the whole word is found, it is trimmed. Otherwise, it falls back to
+        trimming character by character from the specified direction.
+
+        Args:
+            reading: The reading string to be trimmed.
+            word: The kanji word (surface text) that corresponds to the reading to be removed.
+            annotations: Existing annotations to guide the trimming.
+            direction: 'ltr' to trim from the beginning, 'rtl' to trim from the end.
+
+        Returns:
+            The trimmed reading string.
+
+        Raises:
+            ImpossibleToAlignException: If the reading cannot be aligned with the annotations.
+        """
+
+        if not word:
+            return reading
+        annotations = annotations or {}
+        if not annotations:
+            raise ImpossibleToAlignException(
+                f"unable to trim reading from word {word!r} with empty annotations"
+            )
+
+        r = self._lookup_anno_match_reading(
+            reading, word, annotations, direction=direction
+        )
+        if r is not None:
+            return reading[len(r) :] if direction == "ltr" else reading[: -len(r)]
+        else:
+            chars = word if direction == "ltr" else reversed(word)
+            for ch in chars:
+                r = self._lookup_anno_match_reading(
+                    reading, ch, annotations, direction=direction
+                )
+                if r is None:
+                    raise ImpossibleToAlignException(
+                        f"cannot split reading at {direction} boundary: "
+                        f"word={word!r} char={ch!r} remaining={reading!r}"
+                    )
+                reading = (
+                    reading[len(r) :] if direction == "ltr" else reading[: -len(r)]
+                )
+            return reading
+
     def _align_token_to_boundary(
         self,
         tok: Token,
@@ -223,19 +329,9 @@ class TextNode:
                 reading = reading[inner_offset:]
             else:
                 discarded = chunk_text[:inner_offset]
-                r = annotations.get(discarded)
-                if r and reading.startswith(r):
-                    reading = reading[len(r) :]
-                else:
-                    for ch in discarded:
-                        r = annotations.get(ch)
-                        if not r or not reading.startswith(r):
-                            raise ImpossibleToAlignException(
-                                f"cannot split reading at left boundary: "
-                                f"surface={tok.surface!r} reading={tok.reading!r} "
-                                f"char={ch!r} remaining={reading!r}"
-                            )
-                        reading = reading[len(r) :]
+                reading = self._trim_reading_by_lookup_anno(
+                    reading, discarded, annotations, direction="ltr"
+                )
         else:
             reading = self._consume_rtl(
                 chunks[overlap_idx + 1 :], overlap_chunk, reading
@@ -246,19 +342,9 @@ class TextNode:
                 reading = reading[:-trim] if trim else reading
             else:
                 discarded = chunk_text[inner_offset:]
-                r = annotations.get(discarded)
-                if r and reading.endswith(r):
-                    reading = reading[: -len(r)]
-                else:
-                    for ch in reversed(discarded):
-                        r = annotations.get(ch)
-                        if not r or not reading.endswith(r):
-                            raise ImpossibleToAlignException(
-                                f"cannot split reading at right boundary: "
-                                f"surface={tok.surface!r} reading={tok.reading!r} "
-                                f"char={ch!r} remaining={reading!r}"
-                            )
-                        reading = reading[: -len(r)]
+                reading = self._trim_reading_by_lookup_anno(
+                    reading, discarded, annotations, direction="rtl"
+                )
 
         return reading
 
@@ -310,10 +396,11 @@ class TextNode:
                     direction="rtl",
                 )
 
-        except ImpossibleToAlignException:
-            log.warning(
-                "boundary alignment failed for %r, falling back to isolated tokenisation",
+        except ImpossibleToAlignException as e:
+            log.info(
+                "boundary alignment failed for %r: %s. falling back to isolated tokenisation",
                 self.text,
+                e,
             )
             return TokenizedText(
                 node=self,

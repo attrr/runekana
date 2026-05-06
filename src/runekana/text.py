@@ -10,9 +10,18 @@ log = logging.getLogger("runekana.text")
 kanji_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf々〇]"
 hiragana_pattern = r"[\u3040-\u309f]"
 katakana_pattern = r"[\u30a0-\u30ff]"
+
 # IMPORTANT: The capture group () is required so re.split keeps the kanji chunks in the output array
-kanji_regex = re.compile(rf"({kanji_pattern}+)")
+kanji_regex_split = re.compile(rf"({kanji_pattern}+)")
+kanji_regex_all = re.compile(rf"{kanji_pattern}+")
 kanji_regex_once = re.compile(kanji_pattern)
+
+kana_regex_all = re.compile(rf"[{hiragana_pattern[1:-1]}{katakana_pattern[1:-1]}]+")
+hiragana_regex_all = re.compile(rf"{hiragana_pattern}+")
+katakana_regex_all = re.compile(rf"{katakana_pattern}+")
+
+SMALL_KANA_CHARS = "ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ"
+small_kana_regex = re.compile(rf"[{SMALL_KANA_CHARS}\u31f0-\u31ff]")
 
 
 # text helper functions
@@ -21,33 +30,36 @@ def has_kanji(text: str) -> bool:
     return bool(kanji_regex_once.search(text))
 
 
+def has_small_kana(text: str) -> bool:
+    """Check if the string contains any small Kana characters."""
+    return bool(small_kana_regex.search(text))
+
+
 def is_kanji(text: str) -> bool:
     """Check if the string consists only of Kanji characters."""
-    return bool(re.fullmatch(rf"{kanji_pattern}+", text))
+    return bool(kanji_regex_all.fullmatch(text))
 
 
 def is_hiragana(text: str) -> bool:
     """Check if the string consists only of Hiragana characters."""
-    return bool(re.fullmatch(rf"{hiragana_pattern}+", text))
+    return bool(hiragana_regex_all.fullmatch(text))
 
 
 def is_katakana(text: str) -> bool:
     """Check if the string consists only of Katakana characters."""
-    return bool(re.fullmatch(rf"{katakana_pattern}+", text))
+    return bool(katakana_regex_all.fullmatch(text))
 
 
 def is_kana(text: str) -> bool:
     """Check if the string consists only of Kana characters (Hiragana or Katakana)."""
-    return bool(
-        re.fullmatch(rf"[{hiragana_pattern[1:-1]}{katakana_pattern[1:-1]}]+", text)
-    )
+    return bool(kana_regex_all.fullmatch(text))
 
 
 def chunk_by_kanji(text: str) -> list[tuple[str, bool]]:
     """Split text into chunks, tagging each as kanji (True) or not (False)."""
     return [
-        (part, bool(kanji_regex.fullmatch(part)))
-        for part in kanji_regex.split(text)
+        (part, bool(kanji_regex_split.fullmatch(part)))
+        for part in kanji_regex_split.split(text)
         if part
     ]
 

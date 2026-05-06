@@ -7,6 +7,7 @@ from runekana.text import (
     is_hiragana,
     is_katakana,
     is_kana,
+    has_small_kana,
 )
 
 
@@ -115,6 +116,15 @@ def test_normalize_kana():
     assert normalize_kana("ひらがな") == "ひらがな"
     assert normalize_kana("ページ") == "ぺーじ"
     assert normalize_kana("") == ""
+
+
+def test_has_small_kana():
+    assert has_small_kana("きゃ") is True
+    assert has_small_kana("っ") is True
+    assert has_small_kana("ァ") is True
+    assert has_small_kana("あいうえお") is False
+    assert has_small_kana("漢字") is False
+    assert has_small_kana("") is False
 
 
 def test_is_hiragana():
