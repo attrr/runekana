@@ -19,6 +19,19 @@ def temp_xdg_home(monkeypatch):
         yield tmpdir
 
 
+@pytest.fixture
+def tok():
+    return Tokenizer(skip_words=set(), local_dict={})
+
+
+@pytest.fixture
+def get_m(tok):
+    def _get_m(text):
+        return tok.tokenizer.tokenize(text)[0]
+
+    return _get_m
+
+
 def test_yomitandb_rank_extraction():
     db = YomitanDB()
     # Test chaotic Yomitan metadata schemas
@@ -48,14 +61,9 @@ def test_yomitandb_import_and_get(temp_xdg_home):
         db.import_dict(tmpdir)
 
         # Test retrieval
-        top_1 = db.get_top_n(5)
-        assert top_1 == {"走る"}
-
-        top_2 = db.get_top_n(10)
-        assert top_2 == {"走る", "食べる"}
-
-        top_10 = db.get_top_n(20)
-        assert len(top_10) == 3
+        assert db.get_top_n(5) == {"走る"}
+        assert db.get_top_n(10) == {"走る", "食べる"}
+        assert len(db.get_top_n(20)) == 3
 
 
 def test_local_dict_io():
@@ -81,9 +89,8 @@ def test_local_dict_io():
             os.remove(tmp_path)
 
 
-def test_tokenizer_basic():
+def test_tokenizer_basic(tok):
     # Requires sudachidict-full to be installed
-    tok = Tokenizer(skip_words=set(), local_dict={})
     results = tok.tokenize("私は漢字が大好きです。")
 
     surfaces = [t.surface for t in results]
@@ -115,21 +122,17 @@ def test_tokenizer_local_dict():
     assert karada.reading == "からだ"
 
 
-def test_tokenizer_ambiguity():
-    tok = Tokenizer(skip_words=set(), local_dict={})
-
+def test_tokenizer_ambiguity(tok, get_m):
     # '身体' is usually ambiguous in Sudachi (shintai, karada)
-    assert tok.is_ambiguous("身体") is True
+    assert tok.is_ambiguous(get_m("身体")) is True
 
     # '私' (watashi, watakushi) might be ambiguous depending on dict
     # But 'あ' should not be ambiguous
-    assert tok.is_ambiguous("あ") is False
+    assert tok.is_ambiguous(get_m("あ")) is False
 
 
-def test_tokenizer_to_verify_flag():
-    tok = Tokenizer(skip_words=set(), local_dict={})
+def test_tokenizer_to_verify_flag(tok):
     results = tok.tokenize("身体")
-
     karada = next(t for t in results if t.surface == "身体")
     # Should be true because '身体' has multiple readings
     assert karada.to_verify is True
@@ -140,12 +143,11 @@ def test_tokenizer_to_verify_flag():
     assert taberu.to_verify is False
 
 
-def test_tokenizer_compound_words():
+def test_tokenizer_compound_words(tok, get_m):
     """
     Test how the tokenizer handles compound words that Sudachi (SplitMode.C)
     keeps as a single token, such as '打ち合わせ'.
     """
-    tok = Tokenizer(skip_words=set(), local_dict={})
     results = tok.tokenize("今日の打ち合わせは午後からです。")
 
     # Verify '打ち合わせ' is a single token in SplitMode.C
@@ -160,8 +162,8 @@ def test_tokenizer_compound_words():
     assert hikkoshi.reading == "ひっこし"
 
     # Check ambiguity for these compound words
-    assert tok.is_ambiguous("打ち合わせ") is False
-    assert tok.is_ambiguous("引っ越し") is False
+    assert tok.is_ambiguous(get_m("打ち合わせ")) is False
+    assert tok.is_ambiguous(get_m("引っ越し")) is False
 
 
 def test_tokenizer_compound_skip_prevention():
@@ -178,10 +180,8 @@ def test_tokenizer_compound_skip_prevention():
             assert token.reading is not None
 
 
-def test_tokenizer_numeric_handling():
+def test_tokenizer_numeric_handling(tok):
     """Test handling of numerals: unambiguous numerals should be skipped."""
-    tok = Tokenizer(skip_words=set(), local_dict={})
-
     # '100円'
     results = tok.tokenize("100円")
     num_token = next(t for t in results if "100" in t.surface)
@@ -190,22 +190,20 @@ def test_tokenizer_numeric_handling():
     # '三千円'
     results2 = tok.tokenize("三千円")
     sen_token = next(t for t in results2 if "三千" in t.surface)
-    if not tok.is_ambiguous(sen_token.surface):
+    if not tok.is_ambiguous(sen_token.morpheme):
         assert sen_token.reading is None
 
 
-def test_tokenizer_complex_ambiguity():
+def test_tokenizer_complex_ambiguity(tok, get_m):
     """Test complex ambiguous words to ensure to_verify flag is correct."""
-    tok = Tokenizer(skip_words=set(), local_dict={})
-
     # '行方' is ambiguous
-    assert tok.is_ambiguous("行方") is True
+    assert tok.is_ambiguous(get_m("行方")) is True
 
     # '明日' is ambiguous
-    assert tok.is_ambiguous("明日") is True
+    assert tok.is_ambiguous(get_m("明日")) is True
 
     # OOV words should be treated as ambiguous
-    assert tok.is_ambiguous("𠮷野家") is True
+    assert tok.is_ambiguous(get_m("𠮷野家")) is True
 
 
 def test_tokenizer_mixed_sentence():

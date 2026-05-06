@@ -222,14 +222,27 @@ class Tokenizer:
         self.skip_words = skip_words
         self.local_dict = local_dict
 
-    def is_ambiguous(self, surface: str) -> bool:
+    def is_ambiguous(self, m: sudachipy.Morpheme) -> bool:
         """
         Check if a surface form has multiple possible readings in the dictionary,
         or if it's completely out-of-vocabulary (OOV).
         """
-        entries = self.dict.lookup(surface)
-        # Unique readings based on Hiragana representation
-        unique_readings = {jaconv.kata2hira(e.reading_form()) for e in entries}
+        surface = m.surface()
+        if is_kanji(surface) and len(surface) == 1:
+            return True
+
+        # Unique readings from surface
+        unique_readings = {
+            jaconv.kata2hira(e.reading_form()) for e in self.dict.lookup(surface)
+        }
+
+        # Also check dictionary form (lemma) if it's different to catch more ambiguities
+        lemma = m.dictionary_form()
+        if lemma != surface:
+            unique_readings.update(
+                jaconv.kata2hira(e.reading_form()) for e in self.dict.lookup(lemma)
+            )
+
         return len(unique_readings) != 1
 
     def tokenize(self, text: str) -> list[Token]:
@@ -257,15 +270,15 @@ class Tokenizer:
                 surface in self.skip_words or m.dictionary_form() in self.skip_words
             )
             is_numeral = m.part_of_speech()[1] == "数詞"
-            is_numeral_unique = is_numeral and not self.is_ambiguous(surface)
+            is_numeral_unique = is_numeral and not self.is_ambiguous(m)
 
             if to_filter and (is_skip_word or is_numeral_unique):
                 pass
             elif to_filter and surface in self.local_dict:
                 reading = self.local_dict[surface]
-                to_verify = self.is_ambiguous(surface)
+                to_verify = self.is_ambiguous(m)
             else:
                 reading = jaconv.kata2hira(m.reading_form())
-                to_verify = self.is_ambiguous(surface)
+                to_verify = self.is_ambiguous(m)
             results.append(Token(morpheme=m, reading=reading, to_verify=to_verify))
         return results
