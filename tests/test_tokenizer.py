@@ -48,13 +48,13 @@ def test_yomitandb_import_and_get(temp_xdg_home):
         db.import_dict(tmpdir)
 
         # Test retrieval
-        top_1 = db.get_top_n(1)
+        top_1 = db.get_top_n(5)
         assert top_1 == {"走る"}
 
-        top_2 = db.get_top_n(2)
+        top_2 = db.get_top_n(10)
         assert top_2 == {"走る", "食べる"}
 
-        top_10 = db.get_top_n(10)
+        top_10 = db.get_top_n(20)
         assert len(top_10) == 3
 
 

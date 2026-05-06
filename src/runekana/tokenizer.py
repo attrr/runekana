@@ -139,9 +139,7 @@ class YomitanDB:
             return set()
 
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(
-                "SELECT word FROM frequency ORDER BY rank ASC LIMIT ?", (n,)
-            )
+            cursor = conn.execute("SELECT word FROM frequency WHERE rank <= ?", (n,))
             words = {row[0] for row in cursor}
 
         log.info("Loaded skip set: top %d frequent words from cache", len(words))
