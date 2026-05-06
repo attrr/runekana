@@ -1,6 +1,6 @@
 import pytest
 from lxml import etree
-from runekana.document.nodes import Ruby
+from runekana.document import Ruby
 
 
 def parse_ruby(html_str):

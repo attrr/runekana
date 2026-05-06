@@ -17,10 +17,14 @@ Public API::
     )
 """
 
-from runekana.document.context import Context
-from runekana.document.nodes import TextNode, Ruby, ImpossibleToAlignException
-from runekana.document.xhtml import XhtmlDocument, Paragraph
-from runekana.document.tokens import Yomi, TokenizedText
+from runekana.document.dom import (
+    XhtmlDocument,
+    Paragraph,
+    Ruby,
+    ImpossibleToAlignException,
+    TextNode,
+)
+from runekana.document.annotations import Yomi, TokenizedText, Context
 
 __all__ = [
     "Context",

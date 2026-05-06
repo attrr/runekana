@@ -2,10 +2,12 @@ import pytest
 from typing import Any
 from lxml import etree
 from unittest.mock import MagicMock
-from runekana.document.xhtml import Paragraph
-from runekana.document.nodes import TextNode, Ruby
-from runekana.document.tokens import TokenizedText, Yomi, XHTML_NS
+from runekana.document import Paragraph
+from runekana.document import TextNode, Ruby
+from runekana.document import TokenizedText, Yomi
 from runekana.tokenizer import Token
+
+XHTML_NS = "http://www.w3.org/1999/xhtml"
 
 
 # Mock Morpheme for Token

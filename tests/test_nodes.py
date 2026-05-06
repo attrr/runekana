@@ -1,9 +1,10 @@
 import pytest
 import textwrap
 from lxml import etree
-from runekana.document.xhtml import Paragraph
-from runekana.document.context import Context
-from runekana.document.tokens import XHTML_NS
+from runekana.document import Paragraph
+from runekana.document import Context
+
+XHTML_NS = "http://www.w3.org/1999/xhtml"
 
 
 def make_paragraph(inner_html: str) -> Paragraph:

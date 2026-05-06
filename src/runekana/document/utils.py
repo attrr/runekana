@@ -2,6 +2,39 @@ from typing import Optional, Any
 from bisect import bisect_left, bisect_right
 
 from lxml import etree
+from lxml.builder import ElementMaker
+
+XHTML_NS = "http://www.w3.org/1999/xhtml"
+BLOCK_TAGS = {
+    "p",
+    "div",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "blockquote",
+    "section",
+}
+VOID_ELEMENTS = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "source",
+    "track",
+    "wbr",
+}
+
+E = ElementMaker(namespace=XHTML_NS)
 
 
 def get_tag_from_element(elem: etree.Element | None):
