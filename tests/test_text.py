@@ -1,5 +1,13 @@
 import pytest
-from runekana.text import split_okurigana, has_kanji, chunk_by_kanji, normalize_kana
+from runekana.text import (
+    split_okurigana,
+    has_kanji,
+    chunk_by_kanji,
+    normalize_kana,
+    is_hiragana,
+    is_katakana,
+    is_kana,
+)
 
 
 @pytest.mark.parametrize(
@@ -107,3 +115,32 @@ def test_normalize_kana():
     assert normalize_kana("ひらがな") == "ひらがな"
     assert normalize_kana("ページ") == "ぺーじ"
     assert normalize_kana("") == ""
+
+
+def test_is_hiragana():
+    assert is_hiragana("あいうえお") is True
+    assert is_hiragana("あ") is True
+    assert is_hiragana("カタカナ") is False
+    assert is_hiragana("漢字") is False
+    assert is_hiragana("あカ") is False
+    assert is_hiragana("") is False
+
+
+def test_is_katakana():
+    assert is_katakana("カタカナ") is True
+    assert is_katakana("カ") is True
+    assert is_katakana("あいうえお") is False
+    assert is_katakana("漢字") is False
+    assert is_katakana("あカ") is False
+    assert is_katakana("") is False
+
+
+def test_is_kana():
+    assert is_kana("あいうえお") is True
+    assert is_kana("カタカナ") is True
+    assert is_kana("あカ") is True
+    assert is_kana("あ") is True
+    assert is_kana("カ") is True
+    assert is_kana("漢字") is False
+    assert is_kana("A") is False
+    assert is_kana("") is False

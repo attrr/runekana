@@ -8,6 +8,8 @@ log = logging.getLogger("runekana.text")
 
 # regex
 kanji_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf々〇]"
+hiragana_pattern = r"[\u3040-\u309f]"
+katakana_pattern = r"[\u30a0-\u30ff]"
 # IMPORTANT: The capture group () is required so re.split keeps the kanji chunks in the output array
 kanji_regex = re.compile(rf"({kanji_pattern}+)")
 kanji_regex_once = re.compile(kanji_pattern)
@@ -22,6 +24,23 @@ def has_kanji(text: str) -> bool:
 def is_kanji(text: str) -> bool:
     """Check if the string consists only of Kanji characters."""
     return bool(re.fullmatch(rf"{kanji_pattern}+", text))
+
+
+def is_hiragana(text: str) -> bool:
+    """Check if the string consists only of Hiragana characters."""
+    return bool(re.fullmatch(rf"{hiragana_pattern}+", text))
+
+
+def is_katakana(text: str) -> bool:
+    """Check if the string consists only of Katakana characters."""
+    return bool(re.fullmatch(rf"{katakana_pattern}+", text))
+
+
+def is_kana(text: str) -> bool:
+    """Check if the string consists only of Kana characters (Hiragana or Katakana)."""
+    return bool(
+        re.fullmatch(rf"[{hiragana_pattern[1:-1]}{katakana_pattern[1:-1]}]+", text)
+    )
 
 
 def chunk_by_kanji(text: str) -> list[tuple[str, bool]]:

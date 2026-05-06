@@ -7,7 +7,7 @@ from typing import Literal, Optional, Self, TYPE_CHECKING
 from lxml import etree
 
 from runekana.tokenizer import Token, Tokenizer
-from runekana.text import chunk_by_kanji, normalize_kana
+from runekana.text import chunk_by_kanji, is_kana, normalize_kana
 
 from .utils import get_tag_from_element, generate_offsets, find_overlap_range
 from .tokens import Yomi, TokenizedText
@@ -99,9 +99,14 @@ class TextNode:
                     reading = reading.removeprefix(text)
                     continue
                 else:
-                    raise ImpossibleToAlignException(
-                        f"kana in reading not match kana in surface: {text!r} not in {reading!r}"
-                    )
+                    if is_kana(text) and is_kana(reading):
+                        raise ValueError(
+                            f"kana in reading not match kana in surface: {text!r} not in {reading!r}"
+                        )
+                    else:
+                        raise ImpossibleToAlignException(
+                            f"surface {text!r} or reading {reading!r} is not pure kana"
+                        )
 
             if idx == len(chunks) - 1:
                 next_kana = overlap_chunk[0]
@@ -154,10 +159,14 @@ class TextNode:
 
             if not is_kanji:
                 if not reading.endswith(text):
-                    # FIXME: only return this for kana-only chunk(no number/en/etc)
-                    raise ImpossibleToAlignException(
-                        f"kana in reading not match kana in surface: {text!r} not in {reading!r}"
-                    )
+                    if is_kana(text) and is_kana(reading):
+                        raise ValueError(
+                            f"kana in reading not match kana in surface: {text!r} not in {reading!r}"
+                        )
+                    else:
+                        raise ImpossibleToAlignException(
+                            f"surface {text!r} or reading {reading!r} is not pure kana"
+                        )
                 reading = reading.removesuffix(text)
                 continue
 
